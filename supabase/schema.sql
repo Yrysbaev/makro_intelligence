@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS sales_managers (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name VARCHAR(100) NOT NULL,
   email VARCHAR(150) UNIQUE,
-  phone VARCHAR(20),
+  phone VARCHAR(50),
   territory VARCHAR(100),
   is_active BOOLEAN DEFAULT true,
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS customers (
   city VARCHAR(100),
   state VARCHAR(50),
   address TEXT,
-  phone VARCHAR(20),
+  phone VARCHAR(50),
   email VARCHAR(150),
   sales_manager_id UUID REFERENCES sales_managers(id),
   is_active BOOLEAN DEFAULT true,

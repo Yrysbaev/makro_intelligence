@@ -9,21 +9,49 @@ import {
   refreshAccessToken, mapQBOCustomer, mapQBOItem, mapQBOInvoice, mapQBOEmployee,
 } from '@/lib/intuit';
 
-async function batchUpsert(
+async function resilientUpsert(
   table: string,
   rows: Record<string, unknown>[],
-  onConflict: string
+  onConflict: string,
+  retryRow?: (row: Record<string, unknown>, errorMessage: string) => Record<string, unknown> | null
 ): Promise<{ upserted: number; errors: string[] }> {
   if (rows.length === 0) return { upserted: 0, errors: [] };
 
-  const { error } = await getSupabaseAdmin()
+  const admin = getSupabaseAdmin();
+  const { error: batchError } = await admin
     .from(table)
     .upsert(rows as never[], { onConflict });
 
-  if (error) {
-    return { upserted: 0, errors: [`${table}: ${error.message}`] };
+  if (!batchError) return { upserted: rows.length, errors: [] };
+
+  let upserted = 0;
+  const errors: string[] = [];
+
+  for (const row of rows) {
+    let payload = row;
+    let { error } = await admin.from(table).upsert(payload as never, { onConflict });
+
+    if (error && retryRow) {
+      const retry = retryRow(row, error.message);
+      if (retry) {
+        payload = retry;
+        ({ error } = await admin.from(table).upsert(payload as never, { onConflict }));
+      }
+    }
+
+    if (error) {
+      const id = String(row.qbo_id ?? row.name ?? 'unknown');
+      errors.push(`${table} ${id}: ${error.message}`);
+    } else {
+      upserted++;
+    }
   }
-  return { upserted: rows.length, errors: [] };
+
+  if (upserted === 0 && errors.length === 0) {
+    errors.push(`${table}: ${batchError.message}`);
+  }
+
+  return { upserted, errors };
 }
 
 export async function POST(request: NextRequest) {
@@ -72,7 +100,7 @@ export async function POST(request: NextRequest) {
         ...mapQBOEmployee(emp),
         territory: 'Unassigned',
       }));
-      const r = await batchUpsert('sales_managers', rows, 'qbo_id');
+      const r = await resilientUpsert('sales_managers', rows, 'qbo_id');
       results.employees = r.upserted;
       errors.push(...r.errors);
     }
@@ -80,11 +108,20 @@ export async function POST(request: NextRequest) {
     if (entities.includes('items')) {
       const items = await fetchItems(realmId, accessToken);
       fetched.items = items.length;
+      const usedSkus = new Set<string>();
       const rows = items.map((item) => ({
-        ...mapQBOItem(item),
+        ...mapQBOItem(item, usedSkus),
         unit_of_measure: 'unit',
       }));
-      const r = await batchUpsert('products', rows, 'qbo_id');
+      const r = await resilientUpsert(
+        'products',
+        rows,
+        'qbo_id',
+        (row, message) =>
+          message.includes('products_sku_key')
+            ? { ...row, sku: `QBO-${row.qbo_id}` }
+            : null
+      );
       results.items = r.upserted;
       errors.push(...r.errors);
     }
@@ -93,7 +130,7 @@ export async function POST(request: NextRequest) {
       const customers = await fetchCustomers(realmId, accessToken);
       fetched.customers = customers.length;
       const rows = customers.map((c) => mapQBOCustomer(c));
-      const r = await batchUpsert('customers', rows, 'qbo_id');
+      const r = await resilientUpsert('customers', rows, 'qbo_id');
       results.customers = r.upserted;
       errors.push(...r.errors);
     }

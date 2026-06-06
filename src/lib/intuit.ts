@@ -187,6 +187,26 @@ async function qboQuery<T>(
   return queryResponse[entityKey] as T[];
 }
 
+async function qboQueryAll<T>(
+  realmId: string,
+  accessToken: string,
+  selectSql: string,
+  pageSize = 1000
+): Promise<T[]> {
+  const results: T[] = [];
+  let start = 1;
+
+  while (true) {
+    const sql = `${selectSql} STARTPOSITION ${start} MAXRESULTS ${pageSize}`;
+    const page = await qboQuery<T>(realmId, accessToken, sql);
+    results.push(...page);
+    if (page.length < pageSize) break;
+    start += pageSize;
+  }
+
+  return results;
+}
+
 // ─── QBO Data Fetchers ────────────────────────────────────────────────────────
 
 export interface QBOCustomer {
@@ -262,9 +282,9 @@ export interface QBOEmployee {
 }
 
 export async function fetchCustomers(realmId: string, accessToken: string): Promise<QBOCustomer[]> {
-  return qboQuery<QBOCustomer>(
+  return qboQueryAll<QBOCustomer>(
     realmId, accessToken,
-    "SELECT * FROM Customer WHERE Active = true MAXRESULTS 1000"
+    'SELECT * FROM Customer WHERE Active = true'
   );
 }
 
@@ -276,48 +296,83 @@ export async function fetchInvoices(
   const whereClause = since
     ? `WHERE MetaData.LastUpdatedTime > '${since}'`
     : '';
-  return qboQuery<QBOInvoice>(
+  return qboQueryAll<QBOInvoice>(
     realmId, accessToken,
-    `SELECT * FROM Invoice ${whereClause} MAXRESULTS 1000`
+    `SELECT * FROM Invoice ${whereClause}`.trim()
   );
 }
 
 export async function fetchItems(realmId: string, accessToken: string): Promise<QBOItem[]> {
-  return qboQuery<QBOItem>(
+  return qboQueryAll<QBOItem>(
     realmId, accessToken,
-    "SELECT * FROM Item WHERE Active = true MAXRESULTS 1000"
+    'SELECT * FROM Item WHERE Active = true'
   );
 }
 
 export async function fetchEmployees(realmId: string, accessToken: string): Promise<QBOEmployee[]> {
-  return qboQuery<QBOEmployee>(
+  return qboQueryAll<QBOEmployee>(
     realmId, accessToken,
-    "SELECT * FROM Employee WHERE Active = true MAXRESULTS 200"
+    'SELECT * FROM Employee WHERE Active = true'
   );
 }
 
 // ─── Data Mappers ─────────────────────────────────────────────────────────────
 
+export function truncateField(value: string | null | undefined, maxLength: number): string | null {
+  if (value == null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.length <= maxLength ? trimmed : trimmed.slice(0, maxLength);
+}
+
+export function normalizePhone(phone?: string | null): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/[^\d+]/g, '');
+  if (digits.length >= 10) return truncateField(digits, 50);
+  return truncateField(phone.replace(/\s+/g, ' ').trim(), 50);
+}
+
+/** Unique SKU for products — disambiguate when QBO shares SKUs across items. */
+export function buildProductSku(item: QBOItem, usedSkus: Set<string>): string {
+  const qboSku = `QBO-${item.Id}`;
+  const raw = item.Sku?.trim();
+  if (!raw) {
+    usedSkus.add(qboSku);
+    return qboSku;
+  }
+
+  let candidate = raw.slice(0, 50);
+  if (usedSkus.has(candidate)) {
+    candidate = `${raw.slice(0, 42)}-${item.Id}`.slice(0, 50);
+  }
+  if (usedSkus.has(candidate)) {
+    candidate = qboSku;
+  }
+
+  usedSkus.add(candidate);
+  return candidate;
+}
+
 export function mapQBOCustomer(c: QBOCustomer) {
   return {
     qbo_id: c.Id,
-    name: c.DisplayName,
-    city: c.BillAddr?.City || null,
-    state: c.BillAddr?.CountrySubDivisionCode || null,
+    name: truncateField(c.DisplayName, 200)!,
+    city: truncateField(c.BillAddr?.City, 100),
+    state: truncateField(c.BillAddr?.CountrySubDivisionCode, 50),
     address: c.BillAddr?.Line1 || null,
-    phone: c.PrimaryPhone?.FreeFormNumber || null,
-    email: c.PrimaryEmailAddr?.Address || null,
+    phone: normalizePhone(c.PrimaryPhone?.FreeFormNumber),
+    email: truncateField(c.PrimaryEmailAddr?.Address, 150),
     is_active: c.Active,
     created_at: c.MetaData.CreateTime,
   };
 }
 
-export function mapQBOItem(item: QBOItem) {
+export function mapQBOItem(item: QBOItem, usedSkus: Set<string>) {
   return {
     qbo_id: item.Id,
-    name: item.Name,
-    sku: item.Sku || item.Id,
-    category: item.IncomeAccountRef?.name || item.Type || 'Uncategorized',
+    name: truncateField(item.Name, 200)!,
+    sku: buildProductSku(item, usedSkus),
+    category: truncateField(item.IncomeAccountRef?.name || item.Type || 'Uncategorized', 100)!,
     unit_price: item.UnitPrice || 0,
     cost_price: item.PurchaseCost || 0,
     description: item.Description || null,
@@ -356,9 +411,9 @@ export function mapQBOInvoice(inv: QBOInvoice) {
 export function mapQBOEmployee(emp: QBOEmployee) {
   return {
     qbo_id: emp.Id,
-    name: emp.DisplayName,
-    email: emp.PrimaryEmailAddr?.Address || null,
-    phone: emp.PrimaryPhone?.FreeFormNumber || null,
+    name: truncateField(emp.DisplayName, 100)!,
+    email: truncateField(emp.PrimaryEmailAddr?.Address, 150),
+    phone: normalizePhone(emp.PrimaryPhone?.FreeFormNumber),
     is_active: emp.Active,
   };
 }
