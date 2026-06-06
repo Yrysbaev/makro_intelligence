@@ -23,8 +23,11 @@ export interface IntuitTokens {
 }
 
 export function buildAuthUrl(state: string, redirectUri: string): string {
+  const clientId = process.env.INTUIT_CLIENT_ID;
+  if (!clientId) throw new Error('INTUIT_CLIENT_ID environment variable is not set.');
+
   const params = new URLSearchParams({
-    client_id: process.env.INTUIT_CLIENT_ID!,
+    client_id: clientId,
     response_type: 'code',
     scope: INTUIT_SCOPES,
     redirect_uri: redirectUri,
