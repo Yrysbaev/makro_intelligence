@@ -1,13 +1,14 @@
 'use client';
 
-import { useState } from 'react';
-import { Save, Database, Bell, Palette, User, Shield, RefreshCw } from 'lucide-react';
+import { useState, Suspense } from 'react';
+import { Save, Database, Bell, User, Shield, RefreshCw } from 'lucide-react';
 import Header from '@/components/layout/Header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import QuickBooksConnect from '@/components/settings/QuickBooksConnect';
 
 export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
@@ -21,6 +22,26 @@ export default function SettingsPage() {
     <div className="flex flex-col">
       <Header title="Settings" subtitle="Configure your Makro Intelligence platform" />
       <div className="p-6 space-y-6 max-w-3xl">
+
+        {/* QuickBooks Integration */}
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#2CA01C]/10">
+                <span className="text-xs font-bold text-[#2CA01C]">QB</span>
+              </div>
+              <div>
+                <CardTitle className="text-base">QuickBooks Online</CardTitle>
+                <CardDescription>Sync invoices, customers, products, and sales reps from QuickBooks</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <Suspense fallback={<div className="py-4 text-center text-sm text-gray-400">Loading...</div>}>
+              <QuickBooksConnect />
+            </Suspense>
+          </CardContent>
+        </Card>
 
         {/* Company Profile */}
         <Card>
