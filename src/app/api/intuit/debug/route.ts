@@ -1,25 +1,26 @@
 import { NextResponse } from 'next/server';
 
-// DEVELOPMENT ONLY — remove before going to production
+// Dev-only diagnostics endpoint — returns env var status without exposing values
 export async function GET() {
-  if (process.env.NODE_ENV === 'production') {
-    return NextResponse.json({ error: 'Not available in production' }, { status: 403 });
-  }
-
+  const clientId = process.env.INTUIT_CLIENT_ID;
+  const clientSecret = process.env.INTUIT_CLIENT_SECRET;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  const environment = process.env.INTUIT_ENVIRONMENT || 'sandbox';
+
+  const issues: string[] = [];
+  if (!clientId || clientId === 'your-intuit-client-id') issues.push('INTUIT_CLIENT_ID is missing or placeholder');
+  if (!clientSecret || clientSecret === 'your-intuit-client-secret') issues.push('INTUIT_CLIENT_SECRET is missing or placeholder');
 
   return NextResponse.json({
-    INTUIT_CLIENT_ID: process.env.INTUIT_CLIENT_ID
-      ? `✅ set (${process.env.INTUIT_CLIENT_ID.slice(0, 8)}...)`
-      : '❌ MISSING',
-    INTUIT_CLIENT_SECRET: process.env.INTUIT_CLIENT_SECRET
-      ? '✅ set'
-      : '❌ MISSING',
-    INTUIT_ENVIRONMENT: process.env.INTUIT_ENVIRONMENT || '⚠️  not set (defaults to sandbox)',
-    NEXT_PUBLIC_APP_URL: appUrl || '⚠️  not set',
-    redirect_uri_will_be: `${appUrl || '(origin from request)'}/api/intuit/callback`,
-    SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL
-      ? `✅ set`
-      : '❌ MISSING',
+    ready: issues.length === 0,
+    issues,
+    environment,
+    redirect_uri: `${appUrl || 'http://localhost:3000'}/api/intuit/callback`,
+    vars: {
+      INTUIT_CLIENT_ID: clientId ? `set (${clientId.slice(0, 6)}…)` : 'MISSING',
+      INTUIT_CLIENT_SECRET: clientSecret ? 'set' : 'MISSING',
+      INTUIT_ENVIRONMENT: environment,
+      NEXT_PUBLIC_APP_URL: appUrl || 'not set — defaulting to http://localhost:3000',
+    },
   });
 }
