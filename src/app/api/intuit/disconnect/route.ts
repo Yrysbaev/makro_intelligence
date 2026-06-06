@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { getSupabaseAdmin } from '@/lib/supabase-admin';
 import { revokeToken } from '@/lib/intuit';
 
 export async function POST() {
   try {
-    const { data: conn } = await supabase
+    const { data: conn } = await getSupabaseAdmin()
       .from('intuit_connections')
       .select('refresh_token, realm_id')
       .eq('is_active', true)
@@ -17,7 +17,7 @@ export async function POST() {
       });
 
       // Mark connection as inactive
-      await supabase
+      await getSupabaseAdmin()
         .from('intuit_connections')
         .update({ is_active: false })
         .eq('realm_id', conn.realm_id);

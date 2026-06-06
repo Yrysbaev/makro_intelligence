@@ -161,18 +161,18 @@ CREATE TABLE IF NOT EXISTS uploaded_files (
 -- ============================================================
 
 -- Monthly revenue summary
+-- Monthly Revenue Summary
 CREATE OR REPLACE VIEW monthly_revenue AS
 SELECT
-  DATE_TRUNC('month', invoice_date)::DATE AS month,
-  TO_CHAR(invoice_date, 'YYYY-MM') AS period,
-  SUM(total) AS revenue,
-  COUNT(*) AS orders,
-  AVG(total)::NUMERIC(10,2) AS avg_order_value
+    DATE_TRUNC('month', invoice_date)::DATE AS month,
+    TO_CHAR(DATE_TRUNC('month', invoice_date), 'YYYY-MM') AS period,
+    SUM(total)::NUMERIC(12,2) AS revenue,
+    COUNT(*) AS orders,
+    ROUND(AVG(total), 2) AS avg_order_value
 FROM invoices
-WHERE status != 'cancelled'
+WHERE status <> 'cancelled'
 GROUP BY DATE_TRUNC('month', invoice_date)
 ORDER BY month;
-
 -- Product revenue analytics
 CREATE OR REPLACE VIEW product_revenue AS
 SELECT

@@ -3,9 +3,13 @@
  * Handles OAuth 2.0 token management and QBO REST API calls
  */
 
-const INTUIT_BASE_URL = process.env.INTUIT_ENVIRONMENT === 'production'
-  ? 'https://quickbooks.api.intuit.com'
-  : 'https://sandbox-quickbooks.api.intuit.com';
+import { withRetry } from '@/lib/retry';
+import { getIntuitEnvironment, resilientFetch } from '@/lib/resilient-fetch';
+
+const INTUIT_BASE_URL =
+  getIntuitEnvironment() === 'production'
+    ? 'https://quickbooks.api.intuit.com'
+    : 'https://sandbox-quickbooks.api.intuit.com';
 
 const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const REVOKE_URL = 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke';
@@ -20,6 +24,48 @@ export interface IntuitTokens {
   refresh_token: string;
   realm_id: string;
   expires_at: number; // unix timestamp ms
+}
+
+export { getIntuitEnvironment } from '@/lib/resilient-fetch';
+
+export function getAppBaseUrl(): string {
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '');
+  }
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+  return 'http://localhost:3000';
+}
+
+export function getIntuitRedirectUri(): string {
+  if (process.env.INTUIT_REDIRECT_URI) {
+    return process.env.INTUIT_REDIRECT_URI;
+  }
+  return `${getAppBaseUrl()}/api/intuit/callback`;
+}
+
+/** Production keys require HTTPS redirect URIs; localhost is sandbox-only per Intuit. */
+export function getOAuthSetupIssue(): string | null {
+  if (getIntuitEnvironment() !== 'production') return null;
+
+  try {
+    const { protocol, hostname } = new URL(getIntuitRedirectUri());
+    if (protocol !== 'https:') {
+      return [
+        'Production QuickBooks OAuth requires an HTTPS redirect URI.',
+        'localhost only works with sandbox keys (Development tab).',
+        'To connect your real company locally, use ngrok (ngrok http 3000), set INTUIT_REDIRECT_URI to https://YOUR-TUNNEL/api/intuit/callback, and add that exact URI under Production → Keys & OAuth on developer.intuit.com.',
+      ].join(' ');
+    }
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'Production OAuth cannot use localhost or IP addresses. Use an HTTPS tunnel or deploy the app.';
+    }
+  } catch {
+    return 'INTUIT_REDIRECT_URI is not a valid URL.';
+  }
+
+  return null;
 }
 
 export function buildAuthUrl(state: string, redirectUri: string): string {
@@ -41,7 +87,7 @@ export async function exchangeCodeForTokens(
     `${process.env.INTUIT_CLIENT_ID}:${process.env.INTUIT_CLIENT_SECRET}`
   ).toString('base64');
 
-  const res = await fetch(TOKEN_URL, {
+  const res = await resilientFetch(TOKEN_URL, {
     method: 'POST',
     headers: {
       Authorization: `Basic ${credentials}`,
@@ -71,7 +117,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<{
     `${process.env.INTUIT_CLIENT_ID}:${process.env.INTUIT_CLIENT_SECRET}`
   ).toString('base64');
 
-  const res = await fetch(TOKEN_URL, {
+  const res = await resilientFetch(TOKEN_URL, {
     method: 'POST',
     headers: {
       Authorization: `Basic ${credentials}`,
@@ -116,12 +162,16 @@ async function qboQuery<T>(
 ): Promise<T[]> {
   const url = `${INTUIT_BASE_URL}/v3/company/${realmId}/query?query=${encodeURIComponent(sql)}&minorversion=65`;
 
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/json',
-    },
-  });
+  const res = await withRetry(
+    () =>
+      resilientFetch(url, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      }),
+    { label: 'QBO query', attempts: 3, delayMs: 2000 }
+  );
 
   if (!res.ok) {
     const err = await res.text();
@@ -289,7 +339,7 @@ export function mapQBOInvoice(inv: QBOInvoice) {
   return {
     invoice: {
       qbo_id: inv.Id,
-      invoice_number: inv.DocNumber,
+      invoice_number: inv.DocNumber || `QBO-${inv.Id}`,
       qbo_customer_id: inv.CustomerRef.value,
       customer_name: inv.CustomerRef.name,
       invoice_date: inv.TxnDate,

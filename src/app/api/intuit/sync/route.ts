@@ -1,11 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { getSupabaseAdmin } from '@/lib/supabase-admin';
+import { invalidateAnalyticsCache } from '@/lib/analytics';
+import { formatFetchError } from '@/lib/retry';
+import { getIntuitEnvironment } from '@/lib/resilient-fetch';
+import { getIntuitRedirectUri, getOAuthSetupIssue } from '@/lib/intuit';
 import {
   fetchCustomers, fetchInvoices, fetchItems, fetchEmployees,
   refreshAccessToken, mapQBOCustomer, mapQBOItem, mapQBOInvoice, mapQBOEmployee,
 } from '@/lib/intuit';
 
+async function batchUpsert(
+  table: string,
+  rows: Record<string, unknown>[],
+  onConflict: string
+): Promise<{ upserted: number; errors: string[] }> {
+  if (rows.length === 0) return { upserted: 0, errors: [] };
+
+  const { error } = await getSupabaseAdmin()
+    .from(table)
+    .upsert(rows as never[], { onConflict });
+
+  if (error) {
+    return { upserted: 0, errors: [`${table}: ${error.message}`] };
+  }
+  return { upserted: rows.length, errors: [] };
+}
+
 export async function POST(request: NextRequest) {
+  const errors: string[] = [];
+
   try {
     const body = await request.json().catch(() => ({}));
     const { entities = ['customers', 'items', 'employees', 'invoices'], since } = body as {
@@ -13,8 +36,7 @@ export async function POST(request: NextRequest) {
       since?: string;
     };
 
-    // Load connection from Supabase
-    const { data: conn, error: connErr } = await supabase
+    const { data: conn, error: connErr } = await getSupabaseAdmin()
       .from('intuit_connections')
       .select('*')
       .eq('is_active', true)
@@ -24,12 +46,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No active QuickBooks connection found.' }, { status: 400 });
     }
 
-    // Refresh token if expired (within 5 min buffer)
     let accessToken = conn.access_token;
     if (new Date(conn.expires_at).getTime() - Date.now() < 5 * 60 * 1000) {
       const refreshed = await refreshAccessToken(conn.refresh_token);
       accessToken = refreshed.access_token;
-      await supabase
+      await getSupabaseAdmin()
         .from('intuit_connections')
         .update({
           access_token: refreshed.access_token,
@@ -41,67 +62,63 @@ export async function POST(request: NextRequest) {
 
     const realmId = conn.realm_id;
     const results: Record<string, number> = {};
+    const fetched: Record<string, number> = {};
+    const environment = getIntuitEnvironment();
 
-    // ── Sync Employees / Sales Managers ─────────────────────────────────────
     if (entities.includes('employees')) {
       const employees = await fetchEmployees(realmId, accessToken);
-      let upserted = 0;
-      for (const emp of employees) {
-        const mapped = mapQBOEmployee(emp);
-        const { error } = await supabase
-          .from('sales_managers')
-          .upsert({ ...mapped, territory: 'Unassigned' }, { onConflict: 'qbo_id' });
-        if (!error) upserted++;
-      }
-      results.employees = upserted;
+      fetched.employees = employees.length;
+      const rows = employees.map((emp) => ({
+        ...mapQBOEmployee(emp),
+        territory: 'Unassigned',
+      }));
+      const r = await batchUpsert('sales_managers', rows, 'qbo_id');
+      results.employees = r.upserted;
+      errors.push(...r.errors);
     }
 
-    // ── Sync Products / Items ────────────────────────────────────────────────
     if (entities.includes('items')) {
       const items = await fetchItems(realmId, accessToken);
-      let upserted = 0;
-      for (const item of items) {
-        const mapped = mapQBOItem(item);
-        const { error } = await supabase
-          .from('products')
-          .upsert({ ...mapped, unit_of_measure: 'unit' }, { onConflict: 'qbo_id' });
-        if (!error) upserted++;
-      }
-      results.items = upserted;
+      fetched.items = items.length;
+      const rows = items.map((item) => ({
+        ...mapQBOItem(item),
+        unit_of_measure: 'unit',
+      }));
+      const r = await batchUpsert('products', rows, 'qbo_id');
+      results.items = r.upserted;
+      errors.push(...r.errors);
     }
 
-    // ── Sync Customers ───────────────────────────────────────────────────────
     if (entities.includes('customers')) {
       const customers = await fetchCustomers(realmId, accessToken);
-      let upserted = 0;
-      for (const customer of customers) {
-        const mapped = mapQBOCustomer(customer);
-        const { error } = await supabase
-          .from('customers')
-          .upsert(mapped, { onConflict: 'qbo_id' });
-        if (!error) upserted++;
-      }
-      results.customers = upserted;
+      fetched.customers = customers.length;
+      const rows = customers.map((c) => mapQBOCustomer(c));
+      const r = await batchUpsert('customers', rows, 'qbo_id');
+      results.customers = r.upserted;
+      errors.push(...r.errors);
     }
 
-    // ── Sync Invoices ────────────────────────────────────────────────────────
     if (entities.includes('invoices')) {
       const invoices = await fetchInvoices(realmId, accessToken, since);
+      fetched.invoices = invoices.length;
       let upserted = 0;
+      let skipped = 0;
 
       for (const inv of invoices) {
         const { invoice, line_items } = mapQBOInvoice(inv);
 
-        // Look up our internal customer ID by qbo_customer_id
-        const { data: customerRow } = await supabase
+        const { data: customerRow } = await getSupabaseAdmin()
           .from('customers')
           .select('id')
           .eq('qbo_id', invoice.qbo_customer_id)
           .single();
 
-        if (!customerRow) continue; // skip if customer not yet synced
+        if (!customerRow) {
+          skipped++;
+          continue;
+        }
 
-        const { data: invoiceRow, error: invErr } = await supabase
+        const { data: invoiceRow, error: invErr } = await getSupabaseAdmin()
           .from('invoices')
           .upsert(
             {
@@ -120,11 +137,13 @@ export async function POST(request: NextRequest) {
           .select('id')
           .single();
 
-        if (invErr || !invoiceRow) continue;
+        if (invErr || !invoiceRow) {
+          errors.push(`invoice ${invoice.qbo_id}: ${invErr?.message || 'upsert failed'}`);
+          continue;
+        }
 
-        // Upsert line items
         for (const line of line_items) {
-          const { data: productRow } = await supabase
+          const { data: productRow } = await getSupabaseAdmin()
             .from('products')
             .select('id')
             .eq('qbo_id', line.qbo_item_id)
@@ -132,7 +151,7 @@ export async function POST(request: NextRequest) {
 
           if (!productRow) continue;
 
-          await supabase.from('invoice_items').upsert(
+          const { error: lineErr } = await getSupabaseAdmin().from('invoice_items').upsert(
             {
               invoice_id: invoiceRow.id,
               product_id: productRow.id,
@@ -142,37 +161,61 @@ export async function POST(request: NextRequest) {
             },
             { onConflict: 'invoice_id,product_id' }
           );
+
+          if (lineErr) errors.push(`line item ${invoice.qbo_id}: ${lineErr.message}`);
         }
 
         upserted++;
       }
+
       results.invoices = upserted;
+      if (skipped > 0) {
+        errors.push(`${skipped} invoice(s) skipped — sync customers first`);
+      }
     }
 
-    // Update last sync time
-    await supabase
+    await getSupabaseAdmin()
       .from('intuit_connections')
       .update({ last_synced_at: new Date().toISOString() })
       .eq('realm_id', realmId);
 
+    invalidateAnalyticsCache();
+
+    const totalSynced = Object.values(results).reduce((a, b) => a + b, 0);
+    const totalFetched = Object.values(fetched).reduce((a, b) => a + b, 0);
+
     return NextResponse.json({
-      success: true,
+      success: errors.length === 0 || totalSynced > 0,
       synced: results,
+      fetched,
+      environment,
+      errors: errors.slice(0, 10),
       synced_at: new Date().toISOString(),
+      warning:
+        environment === 'sandbox'
+          ? 'Connected to QuickBooks Sandbox — data is from your sandbox company, not live books. Set INTUIT_ENVIRONMENT=production for real data.'
+          : totalFetched === 0
+            ? 'QuickBooks returned no records. Check that your company has customers, items, and invoices.'
+            : undefined,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('QBO sync error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: formatFetchError(err) }, { status: 500 });
   }
 }
 
 export async function GET() {
-  // Return current connection status
-  const { data: conn } = await supabase
+  const { data: conn } = await getSupabaseAdmin()
     .from('intuit_connections')
     .select('realm_id, connected_at, last_synced_at, expires_at, is_active')
     .eq('is_active', true)
     .single();
 
-  return NextResponse.json({ connected: !!conn, connection: conn || null });
+  return NextResponse.json({
+    connected: !!conn,
+    connection: conn || null,
+    environment: getIntuitEnvironment(),
+    redirect_uri: getIntuitRedirectUri(),
+    oauth_issue: getOAuthSetupIssue(),
+  });
 }

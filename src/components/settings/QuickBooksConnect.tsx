@@ -13,6 +13,9 @@ import { formatDate } from '@/lib/utils';
 
 interface ConnectionStatus {
   connected: boolean;
+  environment?: 'sandbox' | 'production';
+  redirect_uri?: string;
+  oauth_issue?: string | null;
   connection: {
     realm_id: string;
     connected_at: string;
@@ -24,6 +27,10 @@ interface ConnectionStatus {
 interface SyncResult {
   success: boolean;
   synced: Record<string, number>;
+  fetched?: Record<string, number>;
+  environment?: 'sandbox' | 'production';
+  warning?: string;
+  errors?: string[];
   synced_at: string;
   error?: string;
 }
@@ -91,9 +98,21 @@ export default function QuickBooksConnect() {
       setSyncProgress(100);
 
       const data = await res.json();
+
+      if (!res.ok) {
+        setSyncResult({
+          success: false,
+          synced: {},
+          synced_at: '',
+          error: data.error || 'Sync failed',
+        });
+        return;
+      }
+
       setSyncResult(data);
 
       if (data.success) {
+        await fetch('/api/data', { method: 'POST' });
         await fetchStatus();
       }
     } catch (err: any) {
@@ -147,7 +166,26 @@ export default function QuickBooksConnect() {
         </div>
       )}
 
-      {/* Connection Status */}
+      {status.oauth_issue && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800 space-y-2">
+          <p className="font-semibold">OAuth is misconfigured for production</p>
+          <p>{status.oauth_issue}</p>
+          <p className="text-red-700">
+            Redirect URI in use:{' '}
+            <code className="bg-red-100 px-1 rounded break-all">{status.redirect_uri}</code>
+          </p>
+        </div>
+      )}
+
+      {status.connected && status.environment === 'sandbox' && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+          <strong>Sandbox mode:</strong> You are syncing from Intuit&apos;s test company (e.g. Amy&apos;s Bird Sanctuary).
+          For your real Makro QuickBooks data, use Production keys and set{' '}
+          <code className="bg-amber-100 px-1 rounded">INTUIT_ENVIRONMENT=production</code> in{' '}
+          <code>.env.local</code>, then reconnect.
+        </div>
+      )}
+
       <div className={`rounded-xl border p-5 ${
         status.connected ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'
       }`}>
@@ -160,11 +198,14 @@ export default function QuickBooksConnect() {
             <div>
               <p className="font-semibold text-gray-900">QuickBooks Online</p>
               {status.connected && status.connection ? (
-                <div className="flex items-center gap-2 mt-0.5">
+                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                   <p className="text-xs text-gray-500">
                     Company ID: {status.connection.realm_id}
                   </p>
                   <Badge variant="success" className="text-[10px]">Connected</Badge>
+                  <Badge variant={status.environment === 'production' ? 'success' : 'warning'} className="text-[10px]">
+                    {status.environment === 'production' ? 'Production' : 'Sandbox'}
+                  </Badge>
                 </div>
               ) : (
                 <p className="text-xs text-gray-500">Not connected</p>
@@ -186,11 +227,20 @@ export default function QuickBooksConnect() {
               </Button>
             </div>
           ) : (
-            <Button size="sm" asChild className="bg-[#2CA01C] hover:bg-[#228B17] text-white text-xs">
-              <a href="/api/intuit/auth">
-                <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-                Connect QuickBooks
-              </a>
+            <Button
+              size="sm"
+              asChild={!status.oauth_issue}
+              disabled={!!status.oauth_issue}
+              className="bg-[#2CA01C] hover:bg-[#228B17] text-white text-xs disabled:opacity-50"
+            >
+              {status.oauth_issue ? (
+                <span>Fix OAuth config first</span>
+              ) : (
+                <a href="/api/intuit/auth">
+                  <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                  Connect QuickBooks
+                </a>
+              )}
             </Button>
           )}
         </div>
@@ -278,10 +328,27 @@ export default function QuickBooksConnect() {
                     {Object.entries(syncResult.synced).map(([key, count]) => (
                       <div key={key} className="flex items-center justify-between rounded-md bg-white px-3 py-2">
                         <span className="text-xs text-gray-600 capitalize">{key}</span>
-                        <Badge variant="success" className="text-xs">{count} synced</Badge>
+                        <Badge variant={count > 0 ? 'success' : 'warning'} className="text-xs">
+                          {count} synced
+                          {syncResult.fetched?.[key] != null && syncResult.fetched[key] !== count
+                            ? ` / ${syncResult.fetched[key]} from QB`
+                            : ''}
+                        </Badge>
                       </div>
                     ))}
                   </div>
+                  {syncResult.warning && (
+                    <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                      {syncResult.warning}
+                    </p>
+                  )}
+                  {syncResult.errors && syncResult.errors.length > 0 && (
+                    <div className="mt-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 space-y-1">
+                      {syncResult.errors.map((e) => (
+                        <p key={e}>{e}</p>
+                      ))}
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="flex items-start gap-2">
@@ -299,10 +366,20 @@ export default function QuickBooksConnect() {
         <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-xs text-blue-700 space-y-1.5">
           <p className="font-semibold">Setup checklist:</p>
           <ol className="list-decimal list-inside space-y-1 text-blue-600">
-            <li>Go to <strong>developer.intuit.com</strong> and create an app</li>
-            <li>Set redirect URI to <code className="bg-blue-100 px-1 rounded">{typeof window !== 'undefined' ? window.location.origin : ''}/api/intuit/callback</code></li>
-            <li>Add <code className="bg-blue-100 px-1 rounded">INTUIT_CLIENT_ID</code> and <code className="bg-blue-100 px-1 rounded">INTUIT_CLIENT_SECRET</code> to your <code>.env.local</code></li>
-            <li>Click "Connect QuickBooks" above</li>
+            <li>Go to <strong>developer.intuit.com</strong> → your app → <strong>Keys &amp; OAuth</strong></li>
+            <li>
+              <strong>Sandbox (local dev):</strong> use Development keys, add{' '}
+              <code className="bg-blue-100 px-1 rounded">http://localhost:3000/api/intuit/callback</code>, set{' '}
+              <code className="bg-blue-100 px-1 rounded">INTUIT_ENVIRONMENT=sandbox</code>
+            </li>
+            <li>
+              <strong>Production (real Makro data):</strong> use Production keys and an{' '}
+              <strong>HTTPS</strong> redirect URI (localhost is not allowed). Deploy the app or run{' '}
+              <code className="bg-blue-100 px-1 rounded">ngrok http 3000</code>, register{' '}
+              <code className="bg-blue-100 px-1 rounded">https://YOUR-TUNNEL/api/intuit/callback</code> under the{' '}
+              <strong>Production</strong> tab, then set <code className="bg-blue-100 px-1 rounded">INTUIT_REDIRECT_URI</code> to match
+            </li>
+            <li>Add credentials to <code>.env.local</code> and restart the dev server</li>
           </ol>
         </div>
       )}

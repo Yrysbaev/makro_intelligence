@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { exchangeCodeForTokens } from '@/lib/intuit';
-import { supabase } from '@/lib/supabase';
+import { invalidateAnalyticsCache } from '@/lib/analytics';
+import { exchangeCodeForTokens, getAppBaseUrl, getIntuitRedirectUri } from '@/lib/intuit';
+import { getSupabaseAdmin, formatSupabaseAdminError } from '@/lib/supabase-admin';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -11,34 +12,28 @@ export async function GET(request: NextRequest) {
 
   // Handle user denial
   if (error) {
-    return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_APP_URL}/settings?qbo=denied`
-    );
+    return NextResponse.redirect(`${getAppBaseUrl()}/settings?qbo=denied`);
   }
 
   // Validate required params
   if (!code || !realmId || !state) {
-    return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_APP_URL}/settings?qbo=error&msg=missing_params`
-    );
+    return NextResponse.redirect(`${getAppBaseUrl()}/settings?qbo=error&msg=missing_params`);
   }
 
   // Verify state cookie to prevent CSRF
   const cookieState = request.cookies.get('intuit_oauth_state')?.value;
   if (cookieState !== state) {
-    return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_APP_URL}/settings?qbo=error&msg=state_mismatch`
-    );
+    return NextResponse.redirect(`${getAppBaseUrl()}/settings?qbo=error&msg=state_mismatch`);
   }
 
   try {
-    const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL}/api/intuit/callback`;
+    const redirectUri = getIntuitRedirectUri();
     const tokens = await exchangeCodeForTokens(code, redirectUri);
 
     const expiresAt = Date.now() + tokens.expires_in * 1000;
 
     // Upsert connection record in Supabase
-    const { error: dbError } = await supabase
+    const { error: dbError } = await getSupabaseAdmin()
       .from('intuit_connections')
       .upsert({
         realm_id: realmId,
@@ -49,18 +44,20 @@ export async function GET(request: NextRequest) {
         is_active: true,
       }, { onConflict: 'realm_id' });
 
-    if (dbError) throw dbError;
+    if (dbError) {
+      throw new Error(formatSupabaseAdminError(dbError));
+    }
 
-    const response = NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_APP_URL}/settings?qbo=connected`
-    );
+    invalidateAnalyticsCache();
+
+    const response = NextResponse.redirect(`${getAppBaseUrl()}/settings?qbo=connected`);
     // Clear state cookie
     response.cookies.delete('intuit_oauth_state');
     return response;
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('QBO OAuth callback error:', err);
     return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_APP_URL}/settings?qbo=error&msg=${encodeURIComponent(err.message)}`
+      `${getAppBaseUrl()}/settings?qbo=error&msg=${encodeURIComponent(formatSupabaseAdminError(err))}`
     );
   }
 }

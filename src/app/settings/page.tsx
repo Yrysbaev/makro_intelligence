@@ -9,9 +9,11 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import QuickBooksConnect from '@/components/settings/QuickBooksConnect';
+import { useAnalyticsData } from '@/hooks/useAnalyticsData';
 
 export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
+  const { data: meta } = useAnalyticsData<{ hasLiveData: boolean; counts: Record<string, number> }>('meta');
 
   const handleSave = () => {
     setSaved(true);
@@ -92,12 +94,21 @@ export default function SettingsPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-              <p className="text-sm text-amber-700 font-medium">
-                Using sample data — connect Supabase to load live data
-              </p>
-              <Badge variant="warning" className="text-xs">Demo Mode</Badge>
-            </div>
+            {meta?.hasLiveData ? (
+              <div className="flex items-center justify-between rounded-lg border border-green-200 bg-green-50 px-4 py-3">
+                <p className="text-sm text-green-700 font-medium">
+                  Live data active — {meta.counts.customers} customers, {meta.counts.products} products, {meta.counts.invoices} invoices
+                </p>
+                <Badge variant="success" className="text-xs">Live Data</Badge>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-sm text-amber-700 font-medium">
+                  No synced data yet — connect QuickBooks above and run a sync
+                </p>
+                <Badge variant="warning" className="text-xs">Awaiting Sync</Badge>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1.5">Supabase Project URL</label>
               <Input

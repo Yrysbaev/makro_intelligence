@@ -1,12 +1,20 @@
 import { NextResponse } from 'next/server';
-import { buildAuthUrl } from '@/lib/intuit';
+import { buildAuthUrl, getAppBaseUrl, getIntuitRedirectUri, getOAuthSetupIssue } from '@/lib/intuit';
 import crypto from 'crypto';
 
 export async function GET() {
+  const oauthIssue = getOAuthSetupIssue();
+  if (oauthIssue) {
+    const url = new URL('/settings', getAppBaseUrl());
+    url.searchParams.set('qbo', 'error');
+    url.searchParams.set('msg', oauthIssue);
+    return NextResponse.redirect(url);
+  }
+
   // Generate a random state value to prevent CSRF
   const state = crypto.randomBytes(16).toString('hex');
 
-  const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL}/api/intuit/callback`;
+  const redirectUri = getIntuitRedirectUri();
   const authUrl = buildAuthUrl(state, redirectUri);
 
   // Set the state in a cookie so we can verify it on callback

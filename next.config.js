@@ -4,9 +4,6 @@ const nextConfig = {
   images: {
     domains: [],
   },
-  experimental: {
-    serverComponentsExternalPackages: ['xlsx'],
-  },
 };
 
 module.exports = nextConfig;
