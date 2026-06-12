@@ -9,6 +9,9 @@ import {
   refreshAccessToken, mapQBOCustomer, mapQBOItem, mapQBOInvoice, mapQBOEmployee,
 } from '@/lib/intuit';
 
+// Allow long-running syncs on serverless hosts (Vercel caps hobby plans at 60s)
+export const maxDuration = 60;
+
 async function resilientUpsert(
   table: string,
   rows: Record<string, unknown>[],
@@ -136,76 +139,102 @@ export async function POST(request: NextRequest) {
     }
 
     if (entities.includes('invoices')) {
+      const admin = getSupabaseAdmin();
       const invoices = await fetchInvoices(realmId, accessToken, since);
       fetched.invoices = invoices.length;
-      let upserted = 0;
+
+      // Resolve customer/product ids in two queries instead of one per row —
+      // the per-invoice lookups were slow enough to hit serverless timeouts.
+      const [{ data: customerRows, error: custErr }, { data: productRows, error: prodErr }] =
+        await Promise.all([
+          admin.from('customers').select('id, qbo_id'),
+          admin.from('products').select('id, qbo_id'),
+        ]);
+      if (custErr) errors.push(`customers lookup: ${custErr.message}`);
+      if (prodErr) errors.push(`products lookup: ${prodErr.message}`);
+
+      const customerIdByQbo = new Map(
+        (customerRows || []).map((c) => [String(c.qbo_id), c.id as string])
+      );
+      const productIdByQbo = new Map(
+        (productRows || []).map((p) => [String(p.qbo_id), p.id as string])
+      );
+
+      const mapped = invoices.map((inv) => mapQBOInvoice(inv));
       let skipped = 0;
+      const invoiceRows: Record<string, unknown>[] = [];
 
-      for (const inv of invoices) {
-        const { invoice, line_items } = mapQBOInvoice(inv);
-
-        const { data: customerRow } = await getSupabaseAdmin()
-          .from('customers')
-          .select('id')
-          .eq('qbo_id', invoice.qbo_customer_id)
-          .single();
-
-        if (!customerRow) {
+      for (const { invoice } of mapped) {
+        const customerId = customerIdByQbo.get(String(invoice.qbo_customer_id));
+        if (!customerId) {
           skipped++;
           continue;
         }
+        invoiceRows.push({
+          qbo_id: invoice.qbo_id,
+          invoice_number: invoice.invoice_number,
+          customer_id: customerId,
+          invoice_date: invoice.invoice_date,
+          due_date: invoice.due_date,
+          subtotal: invoice.subtotal,
+          tax: invoice.tax,
+          total: invoice.total,
+          status: invoice.status,
+        });
+      }
 
-        const { data: invoiceRow, error: invErr } = await getSupabaseAdmin()
+      const invoiceIdByQbo = new Map<string, string>();
+      if (invoiceRows.length > 0) {
+        const { data: upsertedInvoices, error: invErr } = await admin
           .from('invoices')
-          .upsert(
-            {
-              qbo_id: invoice.qbo_id,
-              invoice_number: invoice.invoice_number,
-              customer_id: customerRow.id,
-              invoice_date: invoice.invoice_date,
-              due_date: invoice.due_date,
-              subtotal: invoice.subtotal,
-              tax: invoice.tax,
-              total: invoice.total,
-              status: invoice.status,
-            },
-            { onConflict: 'qbo_id' }
-          )
-          .select('id')
-          .single();
+          .upsert(invoiceRows as never[], { onConflict: 'qbo_id' })
+          .select('id, qbo_id');
 
-        if (invErr || !invoiceRow) {
-          errors.push(`invoice ${invoice.qbo_id}: ${invErr?.message || 'upsert failed'}`);
-          continue;
+        if (invErr) {
+          errors.push(`invoices: ${invErr.message}`);
         }
+        for (const row of upsertedInvoices || []) {
+          invoiceIdByQbo.set(String(row.qbo_id), row.id as string);
+        }
+      }
 
+      // Aggregate duplicate (invoice, product) lines so a single batch upsert
+      // never hits the same row twice
+      const lineByKey = new Map<
+        string,
+        { invoice_id: string; product_id: string; quantity: number; unit_price: number; total: number }
+      >();
+      for (const { invoice, line_items } of mapped) {
+        const invoiceId = invoiceIdByQbo.get(String(invoice.qbo_id));
+        if (!invoiceId) continue;
         for (const line of line_items) {
-          const { data: productRow } = await getSupabaseAdmin()
-            .from('products')
-            .select('id')
-            .eq('qbo_id', line.qbo_item_id)
-            .single();
-
-          if (!productRow) continue;
-
-          const { error: lineErr } = await getSupabaseAdmin().from('invoice_items').upsert(
-            {
-              invoice_id: invoiceRow.id,
-              product_id: productRow.id,
+          const productId = productIdByQbo.get(String(line.qbo_item_id));
+          if (!productId) continue;
+          const key = `${invoiceId}:${productId}`;
+          const existing = lineByKey.get(key);
+          if (existing) {
+            existing.quantity += line.quantity;
+            existing.total += line.total;
+          } else {
+            lineByKey.set(key, {
+              invoice_id: invoiceId,
+              product_id: productId,
               quantity: line.quantity,
               unit_price: line.unit_price,
               total: line.total,
-            },
-            { onConflict: 'invoice_id,product_id' }
-          );
-
-          if (lineErr) errors.push(`line item ${invoice.qbo_id}: ${lineErr.message}`);
+            });
+          }
         }
-
-        upserted++;
       }
 
-      results.invoices = upserted;
+      if (lineByKey.size > 0) {
+        const { error: lineErr } = await admin
+          .from('invoice_items')
+          .upsert([...lineByKey.values()] as never[], { onConflict: 'invoice_id,product_id' });
+        if (lineErr) errors.push(`invoice line items: ${lineErr.message}`);
+      }
+
+      results.invoices = invoiceIdByQbo.size;
       if (skipped > 0) {
         errors.push(`${skipped} invoice(s) skipped — sync customers first`);
       }
