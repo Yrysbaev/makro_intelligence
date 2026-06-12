@@ -1,35 +1,41 @@
 'use client';
 
-import { DollarSign, Users, Package, ShoppingCart, TrendingUp } from 'lucide-react';
+import { DollarSign, CalendarDays, History, ShoppingCart, TrendingUp, TrendingDown } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import Header from '@/components/layout/Header';
 import MetricCard from '@/components/dashboard/MetricCard';
-import TopProductsTable from '@/components/dashboard/TopProductsTable';
-import TopCustomersTable from '@/components/dashboard/TopCustomersTable';
-import ReorderAlerts from '@/components/dashboard/ReorderAlerts';
-import RevenueLineChart from '@/components/charts/RevenueLineChart';
-import CategoryPieChart from '@/components/charts/CategoryPieChart';
-import TerritoryBarChart from '@/components/charts/TerritoryBarChart';
+import DailyRevenueChart from '@/components/charts/DailyRevenueChart';
+import MonthComparisonChart from '@/components/charts/MonthComparisonChart';
+import ProductBarChart from '@/components/charts/ProductBarChart';
+import MarginBarChart from '@/components/charts/MarginBarChart';
 import { DataState } from '@/components/shared/DataState';
 import { useAnalyticsData } from '@/hooks/useAnalyticsData';
 import { formatCurrency } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
-import type { DashboardMetrics, InventoryItem, RevenueByCategory, RevenueByPeriod, SalesManagerAnalytics, TopCustomer, TopProduct } from '@/types';
+import type {
+  DailyRevenuePoint,
+  DashboardMetrics,
+  MonthComparisonPoint,
+  MonthSummary,
+  TopCustomer,
+  TopMarginProduct,
+  TopProduct,
+} from '@/types';
 
 interface DashboardData {
   hasLiveData: boolean;
   metrics: DashboardMetrics;
-  monthlyRevenue: RevenueByPeriod[];
+  lastMonthDaily: DailyRevenuePoint[];
+  monthComparison: MonthComparisonPoint[];
+  monthSummary: MonthSummary;
   topProducts: TopProduct[];
   topCustomers: TopCustomer[];
-  revenueByCategory: RevenueByCategory[];
-  revenueByTerritory: { territory: string; revenue: number; growth: number }[];
-  salesManagerAnalytics: SalesManagerAnalytics[];
-  inventory: InventoryItem[];
+  topMarginProducts: TopMarginProduct[];
 }
 
 export default function DashboardPage() {
   const { data, loading, error, refresh } = useAnalyticsData<DashboardData>('dashboard');
+  const summary = data?.monthSummary;
 
   return (
     <div className="flex flex-col">
@@ -44,92 +50,57 @@ export default function DashboardPage() {
         hasLiveData={data?.hasLiveData ?? false}
         onRetry={refresh}
       >
-        {data && (
+        {data && summary && (
           <div className="p-6 space-y-6">
             <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
               <MetricCard
-                title="Monthly Revenue"
-                value={data.metrics.total_revenue}
+                title={`This Month (${summary.thisMonthLabel})`}
+                value={summary.thisMonthRevenue}
                 format="currency"
-                change={data.metrics.revenue_growth}
+                change={summary.yoyMtdGrowth}
                 icon={DollarSign}
                 iconColor="text-blue-600"
                 iconBg="bg-blue-50"
-                subtitle="vs. last month"
+                subtitle={`vs ${summary.lastYearLabel} same days`}
               />
               <MetricCard
-                title="Total Customers"
-                value={data.metrics.total_customers}
-                change={data.metrics.customer_growth}
-                icon={Users}
-                iconColor="text-emerald-600"
-                iconBg="bg-emerald-50"
-                subtitle="active accounts"
-              />
-              <MetricCard
-                title="Total Products"
-                value={data.metrics.total_products}
-                icon={Package}
+                title={`Last Month (${summary.lastMonthLabel})`}
+                value={summary.lastMonthRevenue}
+                format="currency"
+                icon={CalendarDays}
                 iconColor="text-violet-600"
                 iconBg="bg-violet-50"
-                subtitle="active SKUs"
+                subtitle="total revenue"
               />
               <MetricCard
-                title="Monthly Orders"
-                value={data.metrics.total_orders}
+                title={`Last Year (${summary.lastYearLabel})`}
+                value={summary.lastYearTotalRevenue}
+                format="currency"
+                icon={History}
+                iconColor="text-emerald-600"
+                iconBg="bg-emerald-50"
+                subtitle="full month total"
+              />
+              <MetricCard
+                title="Orders This Month"
+                value={summary.thisMonthOrders}
                 icon={ShoppingCart}
                 iconColor="text-amber-600"
                 iconBg="bg-amber-50"
-                subtitle={`Avg ${formatCurrency(data.metrics.avg_order_value)}/order`}
+                subtitle={`Avg ${formatCurrency(
+                  summary.thisMonthOrders ? summary.thisMonthRevenue / summary.thisMonthOrders : 0
+                )}/order`}
               />
-            </div>
-
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-              <Card className="xl:col-span-2">
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle className="text-base">Monthly Revenue Trend</CardTitle>
-                      <CardDescription>From synced QuickBooks invoices</CardDescription>
-                    </div>
-                    {data.metrics.revenue_growth !== 0 && (
-                      <div className="flex items-center gap-1.5 rounded-full bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-600">
-                        <TrendingUp className="h-3 w-3" />
-                        {data.metrics.revenue_growth >= 0 ? '+' : ''}
-                        {data.metrics.revenue_growth.toFixed(1)}% vs last month
-                      </div>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <RevenueLineChart data={data.monthlyRevenue} height={260} />
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Revenue by Category</CardTitle>
-                  <CardDescription>From invoice line items</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <CategoryPieChart data={data.revenueByCategory} height={260} />
-                </CardContent>
-              </Card>
             </div>
 
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
               <Card>
                 <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle className="text-base">Best-Selling Products</CardTitle>
-                      <CardDescription>By revenue this month</CardDescription>
-                    </div>
-                    <Badge variant="secondary" className="text-xs">Top 8</Badge>
-                  </div>
+                  <CardTitle className="text-base">Last Month Revenue by Day</CardTitle>
+                  <CardDescription>{summary.lastMonthLabel} · daily invoice totals</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <TopProductsTable products={data.topProducts} />
+                  <DailyRevenueChart data={data.lastMonthDaily} height={280} />
                 </CardContent>
               </Card>
 
@@ -137,26 +108,56 @@ export default function DashboardPage() {
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
                     <div>
-                      <CardTitle className="text-base">Top Customers</CardTitle>
-                      <CardDescription>By revenue this month</CardDescription>
+                      <CardTitle className="text-base">This Month vs Last Year</CardTitle>
+                      <CardDescription>
+                        Cumulative revenue · {summary.thisMonthLabel} vs {summary.lastYearLabel}
+                      </CardDescription>
                     </div>
-                    <Badge variant="secondary" className="text-xs">Top 5</Badge>
+                    {summary.yoyMtdGrowth !== 0 && (
+                      <div
+                        className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                          summary.yoyMtdGrowth >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'
+                        }`}
+                      >
+                        {summary.yoyMtdGrowth >= 0 ? (
+                          <TrendingUp className="h-3 w-3" />
+                        ) : (
+                          <TrendingDown className="h-3 w-3" />
+                        )}
+                        {summary.yoyMtdGrowth >= 0 ? '+' : ''}
+                        {summary.yoyMtdGrowth.toFixed(1)}% vs last year
+                      </div>
+                    )}
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <TopCustomersTable customers={data.topCustomers} />
+                  <MonthComparisonChart
+                    data={data.monthComparison}
+                    thisMonthLabel={summary.thisMonthLabel}
+                    lastYearLabel={summary.lastYearLabel}
+                    height={280}
+                  />
                 </CardContent>
               </Card>
             </div>
 
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-              <Card className="xl:col-span-2">
+              <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Revenue by Territory</CardTitle>
-                  <CardDescription>Sales manager performance by region</CardDescription>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base">Top Customers</CardTitle>
+                      <CardDescription>By revenue · {summary.thisMonthLabel}</CardDescription>
+                    </div>
+                    <Badge variant="secondary" className="text-xs">Top 10</Badge>
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  <TerritoryBarChart data={data.revenueByTerritory} height={220} />
+                  <ProductBarChart
+                    data={data.topCustomers.map((c) => ({ name: c.customer_name, revenue: c.revenue }))}
+                    height={340}
+                    horizontal
+                  />
                 </CardContent>
               </Card>
 
@@ -164,61 +165,36 @@ export default function DashboardPage() {
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
                     <div>
-                      <CardTitle className="text-base">Reorder Alerts</CardTitle>
-                      <CardDescription>Inventory requiring attention</CardDescription>
+                      <CardTitle className="text-base">Best-Selling Products</CardTitle>
+                      <CardDescription>By revenue · {summary.thisMonthLabel}</CardDescription>
                     </div>
-                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-red-100 text-xs font-bold text-red-600">
-                      {data.inventory.filter((i) => i.status === 'out_of_stock' || i.status === 'low_stock').length}
-                    </div>
+                    <Badge variant="secondary" className="text-xs">Top 10</Badge>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <ReorderAlerts items={data.inventory} />
+                  <ProductBarChart
+                    data={data.topProducts.map((p) => ({ name: p.product_name, revenue: p.revenue }))}
+                    height={340}
+                    horizontal
+                  />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base">Highest Margin Products</CardTitle>
+                      <CardDescription>By profit margin · {summary.thisMonthLabel}</CardDescription>
+                    </div>
+                    <Badge variant="secondary" className="text-xs">Top 10</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <MarginBarChart data={data.topMarginProducts} height={340} />
                 </CardContent>
               </Card>
             </div>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Sales Manager Performance</CardTitle>
-                <CardDescription>Summary from synced data</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-100">
-                        <th className="pb-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Manager</th>
-                        <th className="pb-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Territory</th>
-                        <th className="pb-3 text-center text-xs font-semibold text-gray-400 uppercase tracking-wide">Customers</th>
-                        <th className="pb-3 text-right text-xs font-semibold text-gray-400 uppercase tracking-wide">Revenue</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {data.salesManagerAnalytics.map((mgr) => (
-                        <tr key={mgr.manager_id} className="hover:bg-gray-50 transition-colors">
-                          <td className="py-3">
-                            <div className="flex items-center gap-2">
-                              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">
-                                {mgr.manager_name.charAt(0)}
-                              </div>
-                              <span className="font-semibold text-gray-800">{mgr.manager_name}</span>
-                            </div>
-                          </td>
-                          <td className="py-3 text-gray-600">{mgr.territory}</td>
-                          <td className="py-3 text-center text-gray-700">
-                            {mgr.active_customers}/{mgr.customer_count}
-                          </td>
-                          <td className="py-3 text-right font-semibold text-gray-900">
-                            {formatCurrency(mgr.total_revenue)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
           </div>
         )}
       </DataState>

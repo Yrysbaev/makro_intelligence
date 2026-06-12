@@ -2,13 +2,17 @@ import { getSupabaseAdmin } from '@/lib/supabase-admin';
 import { withRetry } from '@/lib/retry';
 import type {
   CustomerAnalytics,
+  DailyRevenuePoint,
   DashboardMetrics,
   InventoryItem,
+  MonthComparisonPoint,
+  MonthSummary,
   ProductAnalytics,
   RevenueByCategory,
   RevenueByPeriod,
   SalesManagerAnalytics,
   TopCustomer,
+  TopMarginProduct,
   TopProduct,
 } from '@/types';
 
@@ -79,8 +83,12 @@ export interface AnalyticsBundle {
   metrics: DashboardMetrics;
   monthlyRevenue: RevenueByPeriod[];
   weeklyRevenue: RevenueByPeriod[];
+  lastMonthDaily: DailyRevenuePoint[];
+  monthComparison: MonthComparisonPoint[];
+  monthSummary: MonthSummary;
   topProducts: TopProduct[];
   topCustomers: TopCustomer[];
+  topMarginProducts: TopMarginProduct[];
   revenueByCategory: RevenueByCategory[];
   revenueByTerritory: { territory: string; revenue: number; growth: number }[];
   customerAnalytics: CustomerAnalytics[];
@@ -95,6 +103,22 @@ function n(v: unknown): number {
 
 function monthKey(date: string): string {
   return date.slice(0, 7);
+}
+
+function shiftMonth(key: string, delta: number): string {
+  const [y, m] = key.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthLabel(key: string): string {
+  const [y, m] = key.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function daysInMonth(key: string): number {
+  const [y, m] = key.split('-').map(Number);
+  return new Date(y, m, 0).getDate();
 }
 
 function daysBetween(a: Date, b: Date): number {
@@ -347,7 +371,7 @@ function buildAnalytics(data: Awaited<ReturnType<typeof fetchBaseData>>): Analyt
       };
     })
     .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 8)
+    .slice(0, 10)
     .map((p, i) => ({ ...p, rank: i + 1 }));
 
   const monthCustomerStats = new Map<string, { revenue: number; orders: number }>();
@@ -379,8 +403,122 @@ function buildAnalytics(data: Awaited<ReturnType<typeof fetchBaseData>>): Analyt
       };
     })
     .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 5)
+    .slice(0, 10)
     .map((c, i) => ({ ...c, rank: i + 1 }));
+
+  // ── Daily revenue: last month + this month vs same month last year ────────
+  // "This month" is anchored on the most recent month with invoice data so the
+  // dashboard stays meaningful when synced data lags the calendar.
+  const anchorKey =
+    currentMonthKey ||
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const lastMonthKey = shiftMonth(anchorKey, -1);
+  const lastYearKey = shiftMonth(anchorKey, -12);
+
+  const dailyTotals = (key: string) => {
+    const map = new Map<number, { revenue: number; orders: number }>();
+    for (const inv of invoices) {
+      if (monthKey(inv.invoice_date) !== key) continue;
+      const day = Number(inv.invoice_date.slice(8, 10));
+      if (!map.has(day)) map.set(day, { revenue: 0, orders: 0 });
+      const d = map.get(day)!;
+      d.revenue += n(inv.total);
+      d.orders += 1;
+    }
+    return map;
+  };
+
+  const lastMonthTotals = dailyTotals(lastMonthKey);
+  const thisMonthTotals = dailyTotals(anchorKey);
+  const lastYearTotals = dailyTotals(lastYearKey);
+
+  const lastMonthDaily: DailyRevenuePoint[] = Array.from(
+    { length: daysInMonth(lastMonthKey) },
+    (_, i) => {
+      const day = i + 1;
+      const d = lastMonthTotals.get(day);
+      return {
+        date: `${lastMonthKey}-${String(day).padStart(2, '0')}`,
+        day,
+        revenue: d?.revenue || 0,
+        orders: d?.orders || 0,
+      };
+    }
+  );
+
+  // Cumulative pacing comparison; the this-month line stops at its latest day with data
+  const lastDataDay = Math.max(0, ...thisMonthTotals.keys());
+  const comparisonDays = Math.max(daysInMonth(anchorKey), daysInMonth(lastYearKey));
+  let thisCum = 0;
+  let lastYearCum = 0;
+  let lastYearMtdRevenue = 0;
+  const monthComparison: MonthComparisonPoint[] = [];
+  for (let day = 1; day <= comparisonDays; day++) {
+    thisCum += thisMonthTotals.get(day)?.revenue || 0;
+    lastYearCum += lastYearTotals.get(day)?.revenue || 0;
+    if (day === lastDataDay) lastYearMtdRevenue = lastYearCum;
+    monthComparison.push({
+      day,
+      thisMonth: day <= lastDataDay ? thisCum : null,
+      lastYear: lastYearCum,
+    });
+  }
+
+  const thisMonthRevenue = thisCum;
+  const lastMonthRevenue = [...lastMonthTotals.values()].reduce((s, d) => s + d.revenue, 0);
+  const lastYearTotalRevenue = lastYearCum;
+
+  const monthSummary: MonthSummary = {
+    thisMonthLabel: monthLabel(anchorKey),
+    lastMonthLabel: monthLabel(lastMonthKey),
+    lastYearLabel: monthLabel(lastYearKey),
+    thisMonthRevenue,
+    thisMonthOrders: [...thisMonthTotals.values()].reduce((s, d) => s + d.orders, 0),
+    lastMonthRevenue,
+    lastYearMtdRevenue,
+    lastYearTotalRevenue,
+    yoyMtdGrowth:
+      lastYearMtdRevenue > 0
+        ? ((thisMonthRevenue - lastYearMtdRevenue) / lastYearMtdRevenue) * 100
+        : 0,
+    momGrowth:
+      lastMonthRevenue > 0
+        ? ((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100
+        : 0,
+  };
+
+  // ── Top margin products (this month) ───────────────────────────────────────
+  const monthMarginStats = new Map<string, { revenue: number; profit: number }>();
+  for (const item of invoiceItems) {
+    if (!currentMonthInvoices.has(item.invoice_id)) continue;
+    const p = productMap.get(item.product_id);
+    if (!p) continue;
+    if (!monthMarginStats.has(item.product_id)) {
+      monthMarginStats.set(item.product_id, { revenue: 0, profit: 0 });
+    }
+    const s = monthMarginStats.get(item.product_id)!;
+    s.revenue += n(item.total);
+    s.profit += n(item.total) - n(p.cost_price) * n(item.quantity);
+  }
+
+  const topMarginProducts: TopMarginProduct[] = [...monthMarginStats.entries()]
+    .filter(([, s]) => s.revenue > 0)
+    .map(([product_id, s]) => {
+      const p = productMap.get(product_id);
+      return {
+        product_id,
+        product_name: p?.name || 'Unknown',
+        sku: p?.sku || '',
+        category: p?.category || 'Uncategorized',
+        revenue: s.revenue,
+        profit: s.profit,
+        margin: (s.profit / s.revenue) * 100,
+        rank: 0,
+      };
+    })
+    .sort((a, b) => b.margin - a.margin)
+    .slice(0, 10)
+    .map((p, i) => ({ ...p, rank: i + 1 }));
 
   // ── Revenue by category ────────────────────────────────────────────────────
   const categoryTotals = new Map<string, number>();
@@ -507,8 +645,12 @@ function buildAnalytics(data: Awaited<ReturnType<typeof fetchBaseData>>): Analyt
     metrics,
     monthlyRevenue,
     weeklyRevenue,
+    lastMonthDaily,
+    monthComparison,
+    monthSummary,
     topProducts,
     topCustomers,
+    topMarginProducts,
     revenueByCategory,
     revenueByTerritory,
     customerAnalytics,
