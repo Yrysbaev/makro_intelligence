@@ -6,7 +6,6 @@ export type AnalyticsView =
   | 'dashboard'
   | 'customers'
   | 'products'
-  | 'sales-managers'
   | 'revenue'
   | 'inventory'
   | 'meta';

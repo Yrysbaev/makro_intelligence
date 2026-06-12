@@ -24,13 +24,6 @@ export async function GET(request: NextRequest) {
           productAnalytics: data.productAnalytics,
           revenueByCategory: data.revenueByCategory,
         });
-      case 'sales-managers':
-        return NextResponse.json({
-          hasLiveData: data.hasLiveData,
-          salesManagerAnalytics: data.salesManagerAnalytics,
-          revenueByTerritory: data.revenueByTerritory,
-          customerAnalytics: data.customerAnalytics,
-        });
       case 'revenue':
         return NextResponse.json({
           hasLiveData: data.hasLiveData,
@@ -51,13 +44,12 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
           hasLiveData: data.hasLiveData,
           metrics: data.metrics,
-          monthlyRevenue: data.monthlyRevenue,
+          lastMonthDaily: data.lastMonthDaily,
+          monthComparison: data.monthComparison,
+          monthSummary: data.monthSummary,
           topProducts: data.topProducts,
           topCustomers: data.topCustomers,
-          revenueByCategory: data.revenueByCategory,
-          revenueByTerritory: data.revenueByTerritory,
-          salesManagerAnalytics: data.salesManagerAnalytics,
-          inventory: data.inventory,
+          topMarginProducts: data.topMarginProducts,
         });
     }
   } catch (err: unknown) {

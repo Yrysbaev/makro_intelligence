@@ -202,6 +202,43 @@ export interface TopCustomer {
   rank: number;
 }
 
+export interface DailyRevenuePoint {
+  date: string;
+  day: number;
+  revenue: number;
+  orders: number;
+}
+
+export interface MonthComparisonPoint {
+  day: number;
+  thisMonth: number | null;
+  lastYear: number;
+}
+
+export interface MonthSummary {
+  thisMonthLabel: string;
+  lastMonthLabel: string;
+  lastYearLabel: string;
+  thisMonthRevenue: number;
+  thisMonthOrders: number;
+  lastMonthRevenue: number;
+  lastYearMtdRevenue: number;
+  lastYearTotalRevenue: number;
+  yoyMtdGrowth: number;
+  momGrowth: number;
+}
+
+export interface TopMarginProduct {
+  product_id: string;
+  product_name: string;
+  sku: string;
+  category: string;
+  revenue: number;
+  profit: number;
+  margin: number;
+  rank: number;
+}
+
 // Upload / parse types
 
 export interface ParsedInvoiceRow {
