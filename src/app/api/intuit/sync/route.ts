@@ -12,6 +12,14 @@ import {
 // Allow long-running syncs on serverless hosts (Vercel caps hobby plans at 60s)
 export const maxDuration = 60;
 
+const UPSERT_CHUNK_SIZE = 500;
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 async function resilientUpsert(
   table: string,
   rows: Record<string, unknown>[],
@@ -183,11 +191,13 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      // Upsert in chunks — a single multi-thousand-row request can exceed the
+      // platform's payload/time limits and return a non-JSON error page
       const invoiceIdByQbo = new Map<string, string>();
-      if (invoiceRows.length > 0) {
+      for (const batch of chunk(invoiceRows, UPSERT_CHUNK_SIZE)) {
         const { data: upsertedInvoices, error: invErr } = await admin
           .from('invoices')
-          .upsert(invoiceRows as never[], { onConflict: 'qbo_id' })
+          .upsert(batch as never[], { onConflict: 'qbo_id' })
           .select('id, qbo_id');
 
         if (invErr) {
@@ -227,10 +237,10 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      if (lineByKey.size > 0) {
+      for (const batch of chunk([...lineByKey.values()], UPSERT_CHUNK_SIZE)) {
         const { error: lineErr } = await admin
           .from('invoice_items')
-          .upsert([...lineByKey.values()] as never[], { onConflict: 'invoice_id,product_id' });
+          .upsert(batch as never[], { onConflict: 'invoice_id,product_id' });
         if (lineErr) errors.push(`invoice line items: ${lineErr.message}`);
       }
 
