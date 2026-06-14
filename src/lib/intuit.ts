@@ -291,14 +291,31 @@ export async function fetchCustomers(realmId: string, accessToken: string): Prom
   );
 }
 
+/**
+ * Floor date for invoice sync. Pulling the entire invoice history (multiple
+ * years) is what makes the sync exceed serverless time limits, so we only
+ * sync invoices dated on/after this day. Override with INTUIT_SYNC_START_DATE.
+ */
+export const SYNC_START_DATE = process.env.INTUIT_SYNC_START_DATE || '2025-01-01';
+
+function isValidQboDate(d: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(d);
+}
+
 export async function fetchInvoices(
   realmId: string,
   accessToken: string,
-  since?: string
+  since?: string,
+  startDate: string = SYNC_START_DATE
 ): Promise<QBOInvoice[]> {
-  const whereClause = since
-    ? `WHERE MetaData.LastUpdatedTime > '${since}'`
-    : '';
+  const conditions: string[] = [];
+  if (startDate && isValidQboDate(startDate)) {
+    conditions.push(`TxnDate >= '${startDate}'`);
+  }
+  if (since) {
+    conditions.push(`MetaData.LastUpdatedTime > '${since}'`);
+  }
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   return qboQueryAll<QBOInvoice>(
     realmId, accessToken,
     `SELECT * FROM Invoice ${whereClause}`.trim()

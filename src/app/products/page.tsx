@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { Search, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import React, { useState } from 'react';
+import { Search, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import Header from '@/components/layout/Header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -11,8 +11,8 @@ import ProductBarChart from '@/components/charts/ProductBarChart';
 import CategoryPieChart from '@/components/charts/CategoryPieChart';
 import { DataState } from '@/components/shared/DataState';
 import { useAnalyticsData } from '@/hooks/useAnalyticsData';
-import { formatCurrency, formatNumber } from '@/lib/utils';
-import type { ProductAnalytics, RevenueByCategory } from '@/types';
+import { formatCurrency, formatNumber, formatDate } from '@/lib/utils';
+import type { ProductAnalytics, ProductSale, RevenueByCategory } from '@/types';
 
 interface ProductsData {
   hasLiveData: boolean;
@@ -37,6 +37,29 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [velocityFilter, setVelocityFilter] = useState('all');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [salesByProduct, setSalesByProduct] = useState<Record<string, ProductSale[]>>({});
+  const [loadingSales, setLoadingSales] = useState<string | null>(null);
+
+  async function toggleProduct(productId: string) {
+    if (expandedId === productId) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(productId);
+    if (!salesByProduct[productId]) {
+      setLoadingSales(productId);
+      try {
+        const res = await fetch(`/api/data?view=product-sales&productId=${productId}`);
+        const json = await res.json();
+        setSalesByProduct((prev) => ({ ...prev, [productId]: json.sales ?? [] }));
+      } catch {
+        setSalesByProduct((prev) => ({ ...prev, [productId]: [] }));
+      } finally {
+        setLoadingSales(null);
+      }
+    }
+  }
 
   const products = data?.productAnalytics ?? [];
   const categories = Array.from(new Set(products.map((p) => p.category)));
@@ -142,8 +165,9 @@ export default function ProductsPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100">
+                      <th className="pb-3 w-8" />
                       {['Product', 'SKU', 'Category', 'Cases Sold', 'Revenue', 'Avg Price', 'Margin', 'Velocity', 'Trend'].map((h) => (
-                        <th key={h} className="pb-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide first:pl-0 px-2">
+                        <th key={h} className="pb-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-2">
                           {h}
                         </th>
                       ))}
@@ -152,24 +176,76 @@ export default function ProductsPage() {
                   <tbody className="divide-y divide-gray-50">
                     {filtered.map((product) => {
                       const vel = velocityConfig[product.velocity];
+                      const isExpanded = expandedId === product.product_id;
+                      const sales = salesByProduct[product.product_id];
                       return (
-                        <tr key={product.product_id} className="hover:bg-gray-50 transition-colors">
-                          <td className="py-3 pl-0 pr-2 font-semibold text-gray-800">{product.product_name}</td>
-                          <td className="py-3 px-2 text-gray-500 font-mono text-xs">{product.sku}</td>
-                          <td className="py-3 px-2 text-gray-600">{product.category}</td>
-                          <td className="py-3 px-2 text-gray-700">{formatNumber(product.cases_sold)}</td>
-                          <td className="py-3 px-2 font-semibold text-gray-900">{formatCurrency(product.revenue)}</td>
-                          <td className="py-3 px-2 text-gray-600">{formatCurrency(product.avg_price)}</td>
-                          <td className="py-3 px-2">
-                            <span className={`text-xs font-semibold ${product.profit_margin > 40 ? 'text-green-600' : product.profit_margin > 30 ? 'text-blue-600' : 'text-amber-600'}`}>
-                              {product.profit_margin.toFixed(1)}%
-                            </span>
-                          </td>
-                          <td className="py-3 px-2">
-                            <Badge variant={vel.variant} className="text-[10px] px-1.5 py-0">{vel.label}</Badge>
-                          </td>
-                          <td className="py-3 px-2">{trendIcons[product.trend]}</td>
-                        </tr>
+                        <React.Fragment key={product.product_id}>
+                          <tr
+                            className="hover:bg-gray-50 transition-colors cursor-pointer"
+                            onClick={() => toggleProduct(product.product_id)}
+                          >
+                            <td className="py-3 pl-1 pr-1 text-gray-400">
+                              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                            </td>
+                            <td className="py-3 px-2 font-semibold text-gray-800">{product.product_name}</td>
+                            <td className="py-3 px-2 text-gray-500 font-mono text-xs">{product.sku}</td>
+                            <td className="py-3 px-2 text-gray-600">{product.category}</td>
+                            <td className="py-3 px-2 text-gray-700">{formatNumber(product.cases_sold)}</td>
+                            <td className="py-3 px-2 font-semibold text-gray-900">{formatCurrency(product.revenue)}</td>
+                            <td className="py-3 px-2 text-gray-600">{formatCurrency(product.avg_price)}</td>
+                            <td className="py-3 px-2">
+                              <span className={`text-xs font-semibold ${product.profit_margin > 40 ? 'text-green-600' : product.profit_margin > 30 ? 'text-blue-600' : 'text-amber-600'}`}>
+                                {product.profit_margin.toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className="py-3 px-2">
+                              <Badge variant={vel.variant} className="text-[10px] px-1.5 py-0">{vel.label}</Badge>
+                            </td>
+                            <td className="py-3 px-2">{trendIcons[product.trend]}</td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="bg-gray-50/60">
+                              <td colSpan={10} className="px-4 py-4">
+                                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                  Sales history — who bought it & when
+                                </p>
+                                {loadingSales === product.product_id ? (
+                                  <div className="flex items-center gap-2 py-4 text-sm text-gray-400">
+                                    <Loader2 className="h-4 w-4 animate-spin" /> Loading sales…
+                                  </div>
+                                ) : sales && sales.length > 0 ? (
+                                  <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+                                    <table className="w-full text-sm">
+                                      <thead>
+                                        <tr className="border-b border-gray-100 bg-gray-50">
+                                          {['Date', 'Invoice', 'Customer', 'Qty', 'Unit Price', 'Total'].map((h) => (
+                                            <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                                              {h}
+                                            </th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-gray-50">
+                                        {sales.map((s, i) => (
+                                          <tr key={`${s.invoice_id}-${i}`} className="hover:bg-gray-50">
+                                            <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{formatDate(s.invoice_date)}</td>
+                                            <td className="px-3 py-2 font-mono text-xs text-gray-500">{s.invoice_number}</td>
+                                            <td className="px-3 py-2 text-gray-800">{s.customer_name}</td>
+                                            <td className="px-3 py-2 text-gray-700">{formatNumber(s.quantity)}</td>
+                                            <td className="px-3 py-2 text-gray-600">{formatCurrency(s.unit_price)}</td>
+                                            <td className="px-3 py-2 font-semibold text-gray-900">{formatCurrency(s.total)}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                ) : (
+                                  <p className="py-4 text-sm text-gray-400">No sales recorded for this product in the synced period.</p>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>

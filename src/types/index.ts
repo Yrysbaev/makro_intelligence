@@ -228,6 +228,16 @@ export interface MonthSummary {
   momGrowth: number;
 }
 
+export interface ProductSale {
+  invoice_id: string;
+  invoice_number: string;
+  invoice_date: string;
+  customer_name: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+}
+
 export interface TopMarginProduct {
   product_id: string;
   product_name: string;

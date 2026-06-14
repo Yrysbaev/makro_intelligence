@@ -24,6 +24,13 @@ export async function GET(request: NextRequest) {
           productAnalytics: data.productAnalytics,
           revenueByCategory: data.revenueByCategory,
         });
+      case 'product-sales': {
+        const productId = request.nextUrl.searchParams.get('productId');
+        return NextResponse.json({
+          hasLiveData: data.hasLiveData,
+          sales: productId ? data.productSales[productId] || [] : [],
+        });
+      }
       case 'revenue':
         return NextResponse.json({
           hasLiveData: data.hasLiveData,
