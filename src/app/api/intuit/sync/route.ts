@@ -7,6 +7,7 @@ import { getIntuitRedirectUri, getOAuthSetupIssue } from '@/lib/intuit';
 import {
   fetchCustomers, fetchInvoices, fetchItems, fetchEmployees,
   refreshAccessToken, mapQBOCustomer, mapQBOItem, mapQBOInvoice, mapQBOEmployee,
+  SYNC_START_DATE,
 } from '@/lib/intuit';
 
 // Allow long-running syncs on serverless hosts (Vercel caps hobby plans at 60s)
@@ -70,9 +71,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json().catch(() => ({}));
-    const { entities = ['customers', 'items', 'employees', 'invoices'], since } = body as {
+    const { entities = ['customers', 'items', 'employees', 'invoices'], since, startDate } = body as {
       entities?: string[];
       since?: string;
+      startDate?: string;
     };
 
     const { data: conn, error: connErr } = await getSupabaseAdmin()
@@ -148,7 +150,7 @@ export async function POST(request: NextRequest) {
 
     if (entities.includes('invoices')) {
       const admin = getSupabaseAdmin();
-      const invoices = await fetchInvoices(realmId, accessToken, since);
+      const invoices = await fetchInvoices(realmId, accessToken, since, startDate || SYNC_START_DATE);
       fetched.invoices = invoices.length;
 
       // Resolve customer/product ids in two queries instead of one per row —
@@ -265,6 +267,7 @@ export async function POST(request: NextRequest) {
       synced: results,
       fetched,
       environment,
+      invoice_start_date: entities.includes('invoices') ? (startDate || SYNC_START_DATE) : undefined,
       errors: errors.slice(0, 10),
       synced_at: new Date().toISOString(),
       warning:

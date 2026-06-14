@@ -8,6 +8,7 @@ import type {
   MonthComparisonPoint,
   MonthSummary,
   ProductAnalytics,
+  ProductSale,
   RevenueByCategory,
   RevenueByPeriod,
   SalesManagerAnalytics,
@@ -40,6 +41,7 @@ interface DbProduct {
 
 interface DbInvoice {
   id: string;
+  invoice_number: string | null;
   customer_id: string;
   sales_manager_id: string | null;
   invoice_date: string;
@@ -93,6 +95,7 @@ export interface AnalyticsBundle {
   revenueByTerritory: { territory: string; revenue: number; growth: number }[];
   customerAnalytics: CustomerAnalytics[];
   productAnalytics: ProductAnalytics[];
+  productSales: Record<string, ProductSale[]>;
   salesManagerAnalytics: SalesManagerAnalytics[];
   inventory: InventoryItem[];
 }
@@ -281,6 +284,26 @@ function buildAnalytics(data: Awaited<ReturnType<typeof fetchBaseData>>): Analyt
       velocity,
     };
   });
+
+  // ── Per-product sales detail (who bought it, when, which invoice) ──────────
+  const productSales: Record<string, ProductSale[]> = {};
+  for (const item of invoiceItems) {
+    const inv = invoiceMap.get(item.invoice_id);
+    if (!inv) continue;
+    const customer = customerMap.get(inv.customer_id);
+    (productSales[item.product_id] ??= []).push({
+      invoice_id: inv.id,
+      invoice_number: inv.invoice_number || `QBO-${inv.id}`,
+      invoice_date: inv.invoice_date,
+      customer_name: customer?.name || 'Unknown',
+      quantity: n(item.quantity),
+      unit_price: n(item.unit_price),
+      total: n(item.total),
+    });
+  }
+  for (const list of Object.values(productSales)) {
+    list.sort((a, b) => b.invoice_date.localeCompare(a.invoice_date));
+  }
 
   // ── Customer analytics ─────────────────────────────────────────────────────
   const customerStats = new Map<
@@ -655,6 +678,7 @@ function buildAnalytics(data: Awaited<ReturnType<typeof fetchBaseData>>): Analyt
     revenueByTerritory,
     customerAnalytics,
     productAnalytics,
+    productSales,
     salesManagerAnalytics,
     inventory: inventoryItems,
   };

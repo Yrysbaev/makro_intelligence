@@ -29,6 +29,7 @@ interface SyncResult {
   synced: Record<string, number>;
   fetched?: Record<string, number>;
   environment?: 'sandbox' | 'production';
+  invoice_start_date?: string;
   warning?: string;
   errors?: string[];
   synced_at: string;
@@ -352,6 +353,11 @@ export default function QuickBooksConnect() {
                       </div>
                     ))}
                   </div>
+                  {syncResult.invoice_start_date && (
+                    <p className="mt-3 text-xs text-gray-500">
+                      Invoices synced from <strong>{formatDate(syncResult.invoice_start_date)}</strong> to today.
+                    </p>
+                  )}
                   {syncResult.warning && (
                     <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
                       {syncResult.warning}
