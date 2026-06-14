@@ -42,6 +42,21 @@ const SYNC_ENTITIES = [
   { key: 'invoices', label: 'Invoices & Line Items', icon: FileText, color: 'text-amber-600' },
 ];
 
+// Some hosts return HTML error pages (e.g. on gateway timeouts); res.json()
+// on those throws Safari's cryptic "string did not match the expected pattern"
+async function parseJsonResponse(res: Response): Promise<any> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      res.ok
+        ? 'The server returned an unexpected response. Please try again.'
+        : `Sync request failed (HTTP ${res.status}). The server may have timed out — try syncing fewer data types at once, or retry in a moment.`
+    );
+  }
+}
+
 export default function QuickBooksConnect() {
   const searchParams = useSearchParams();
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
@@ -70,7 +85,7 @@ export default function QuickBooksConnect() {
   async function fetchStatus() {
     try {
       const res = await fetch('/api/intuit/sync');
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
       setStatus(data);
     } catch {
       setStatus({ connected: false, connection: null });
@@ -97,7 +112,7 @@ export default function QuickBooksConnect() {
       clearInterval(progressInterval);
       setSyncProgress(100);
 
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
 
       if (!res.ok) {
         setSyncResult({

@@ -181,6 +181,9 @@ async function qboQuery<T>(
   const data = await res.json();
   const queryResponse = data.QueryResponse;
 
+  // QBO omits QueryResponse contents entirely when a page has no rows
+  if (!queryResponse || typeof queryResponse !== 'object') return [];
+
   // QBO returns the entity name as the key (e.g. { Customer: [...] })
   const entityKey = Object.keys(queryResponse).find((k) => k !== 'maxResults' && k !== 'startPosition' && k !== 'totalCount');
   if (!entityKey) return [];
