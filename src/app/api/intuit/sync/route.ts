@@ -5,8 +5,8 @@ import { formatFetchError } from '@/lib/retry';
 import { getIntuitEnvironment } from '@/lib/resilient-fetch';
 import { getIntuitRedirectUri, getOAuthSetupIssue } from '@/lib/intuit';
 import {
-  fetchCustomers, fetchInvoices, fetchItems, fetchEmployees,
-  refreshAccessToken, mapQBOCustomer, mapQBOItem, mapQBOInvoice, mapQBOEmployee,
+  fetchCustomers, fetchInvoices, fetchItems,
+  refreshAccessToken, mapQBOCustomer, mapQBOItem, mapQBOInvoice,
   SYNC_START_DATE,
 } from '@/lib/intuit';
 
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json().catch(() => ({}));
-    const { entities = ['customers', 'items', 'employees', 'invoices'], since, startDate } = body as {
+    const { entities = ['customers', 'items', 'invoices'], since, startDate } = body as {
       entities?: string[];
       since?: string;
       startDate?: string;
@@ -105,18 +105,6 @@ export async function POST(request: NextRequest) {
     const results: Record<string, number> = {};
     const fetched: Record<string, number> = {};
     const environment = getIntuitEnvironment();
-
-    if (entities.includes('employees')) {
-      const employees = await fetchEmployees(realmId, accessToken);
-      fetched.employees = employees.length;
-      const rows = employees.map((emp) => ({
-        ...mapQBOEmployee(emp),
-        territory: 'Unassigned',
-      }));
-      const r = await resilientUpsert('sales_managers', rows, 'qbo_id');
-      results.employees = r.upserted;
-      errors.push(...r.errors);
-    }
 
     if (entities.includes('items')) {
       const items = await fetchItems(realmId, accessToken);

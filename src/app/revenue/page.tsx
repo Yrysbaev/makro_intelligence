@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import Header from '@/components/layout/Header';
 import RevenueLineChart from '@/components/charts/RevenueLineChart';
-import TerritoryBarChart from '@/components/charts/TerritoryBarChart';
 import ProductBarChart from '@/components/charts/ProductBarChart';
 import CategoryPieChart from '@/components/charts/CategoryPieChart';
 import { DataState } from '@/components/shared/DataState';
@@ -80,51 +79,28 @@ export default function RevenuePage() {
             </CardContent>
           </Card>
 
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Revenue by Territory</CardTitle>
-                <CardDescription>By sales region</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Tabs defaultValue="amount">
-                  <TabsList className="mb-4">
-                    <TabsTrigger value="amount">Revenue ($)</TabsTrigger>
-                    <TabsTrigger value="growth">Growth (%)</TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="amount">
-                    <TerritoryBarChart data={data?.revenueByTerritory ?? []} height={240} showGrowth={false} />
-                  </TabsContent>
-                  <TabsContent value="growth">
-                    <TerritoryBarChart data={data?.revenueByTerritory ?? []} height={240} showGrowth={true} />
-                  </TabsContent>
-                </Tabs>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Revenue by Category</CardTitle>
-                <CardDescription>Product category distribution</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <CategoryPieChart data={data?.revenueByCategory ?? []} height={280} />
-                <div className="mt-4 space-y-2">
-                  {(data?.revenueByCategory ?? []).map((cat) => (
-                    <div key={cat.category} className="flex items-center justify-between text-sm">
-                      <span className="text-gray-600">{cat.category}</span>
-                      <div className="flex items-center gap-3">
-                        <div className="h-1.5 w-24 rounded-full bg-gray-100 overflow-hidden">
-                          <div className="h-full rounded-full bg-blue-500" style={{ width: `${cat.percentage}%` }} />
-                        </div>
-                        <span className="w-12 text-right font-semibold text-gray-700">{formatCurrency(cat.revenue, true)}</span>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Revenue by Category</CardTitle>
+              <CardDescription>Product category distribution</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <CategoryPieChart data={data?.revenueByCategory ?? []} height={280} />
+              <div className="mt-4 space-y-2">
+                {(data?.revenueByCategory ?? []).map((cat) => (
+                  <div key={cat.category} className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">{cat.category}</span>
+                    <div className="flex items-center gap-3">
+                      <div className="h-1.5 w-24 rounded-full bg-gray-100 overflow-hidden">
+                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${cat.percentage}%` }} />
                       </div>
+                      <span className="w-12 text-right font-semibold text-gray-700">{formatCurrency(cat.revenue, true)}</span>
                     </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
             <Card>

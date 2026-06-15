@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   CheckCircle, AlertCircle, RefreshCw, Unlink, ExternalLink,
-  Users, Package, FileText, UserCheck, Loader2,
+  Users, Package, FileText, Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -37,7 +37,6 @@ interface SyncResult {
 }
 
 const SYNC_ENTITIES = [
-  { key: 'employees', label: 'Sales Reps / Employees', icon: UserCheck, color: 'text-blue-600' },
   { key: 'items', label: 'Products & Items', icon: Package, color: 'text-violet-600' },
   { key: 'customers', label: 'Customers', icon: Users, color: 'text-emerald-600' },
   { key: 'invoices', label: 'Invoices & Line Items', icon: FileText, color: 'text-amber-600' },
@@ -65,7 +64,7 @@ export default function QuickBooksConnect() {
   const [syncProgress, setSyncProgress] = useState(0);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
-  const [selectedEntities, setSelectedEntities] = useState<string[]>(['employees', 'items', 'customers', 'invoices']);
+  const [selectedEntities, setSelectedEntities] = useState<string[]>(['items', 'customers', 'invoices']);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {

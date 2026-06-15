@@ -34,18 +34,15 @@ export default function CustomersPage() {
   const { data, loading, error, refresh } = useAnalyticsData<CustomersData>('customers');
   const [search, setSearch] = useState('');
   const [retentionFilter, setRetentionFilter] = useState('all');
-  const [managerFilter, setManagerFilter] = useState('all');
 
   const customers = data?.customerAnalytics ?? [];
-  const managers = Array.from(new Set(customers.map((c) => c.sales_manager)));
 
   const filtered = customers.filter((c) => {
     const matchesSearch =
       c.customer_name.toLowerCase().includes(search.toLowerCase()) ||
       c.city.toLowerCase().includes(search.toLowerCase());
     const matchesRetention = retentionFilter === 'all' || c.retention_status === retentionFilter;
-    const matchesManager = managerFilter === 'all' || c.sales_manager === managerFilter;
-    return matchesSearch && matchesRetention && matchesManager;
+    return matchesSearch && matchesRetention;
   });
 
   const activeCount = customers.filter((c) => c.retention_status === 'active').length;
@@ -99,17 +96,6 @@ export default function CustomersPage() {
                       <SelectItem value="churned">Churned</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Select value={managerFilter} onValueChange={setManagerFilter}>
-                    <SelectTrigger className="h-9 w-44 text-sm">
-                      <SelectValue placeholder="Manager" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Managers</SelectItem>
-                      {managers.map((m) => (
-                        <SelectItem key={m} value={m}>{m}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                 </div>
               </div>
             </CardHeader>
@@ -118,7 +104,7 @@ export default function CustomersPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100">
-                      {['Customer', 'Location', 'Manager', 'Orders', 'Avg Order', 'Revenue', 'Last Order', 'Status', 'Trend'].map((h) => (
+                      {['Customer', 'Location', 'Orders', 'Avg Order', 'Revenue', 'Last Order', 'Status', 'Trend'].map((h) => (
                         <th key={h} className="pb-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-2 first:pl-0">
                           {h}
                         </th>
@@ -140,7 +126,6 @@ export default function CustomersPage() {
                             </div>
                           </td>
                           <td className="py-3 px-2 text-gray-600 text-xs">{customer.city}{customer.city && customer.state ? ', ' : ''}{customer.state}</td>
-                          <td className="py-3 px-2 text-gray-600 text-xs">{customer.sales_manager.split(' ')[0]}</td>
                           <td className="py-3 px-2 text-gray-700">{customer.order_count}</td>
                           <td className="py-3 px-2 text-gray-600">{formatCurrency(customer.avg_order_value)}</td>
                           <td className="py-3 px-2 font-semibold text-gray-900">{formatCurrency(customer.total_revenue)}</td>
