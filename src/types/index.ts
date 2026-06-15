@@ -238,6 +238,50 @@ export interface ProductSale {
   total: number;
 }
 
+export interface ProductComparison {
+  key: string;
+  product_name: string;
+  sku: string | null;
+  category: string;
+  revenue_2025: number;
+  revenue_2026: number;
+  units_2025: number;
+  units_2026: number;
+  revenue_delta_pct: number | null;
+  status: 'matched' | 'only_2025' | 'only_2026';
+}
+
+export interface CategoryComparison {
+  category: string;
+  revenue_2025: number;
+  revenue_2026: number;
+}
+
+export interface MonthlyComparisonPoint {
+  label: string;            // 'Jan'
+  revenue_2025: number;
+  revenue_2026: number | null;
+}
+
+export interface YearComparisonSummary {
+  label_2025: string;
+  label_2026: string;
+  revenue_2025: number;
+  revenue_2026: number;
+  orders_2025: number;
+  orders_2026: number;
+  matched_products: number;
+  new_products: number;     // sold in 2026 but not 2025
+  dropped_products: number; // sold in 2025 but not 2026
+}
+
+export interface YearComparison {
+  summary: YearComparisonSummary;
+  monthly: MonthlyComparisonPoint[];
+  products: ProductComparison[];
+  categories: CategoryComparison[];
+}
+
 export interface TopMarginProduct {
   product_id: string;
   product_name: string;

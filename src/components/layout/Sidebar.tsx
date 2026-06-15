@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Package, Users, DollarSign,
   Warehouse, Lightbulb, Upload, Settings, ChevronLeft,
-  ChevronRight, BarChart3,
+  ChevronRight, BarChart3, GitCompareArrows,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
@@ -15,6 +15,7 @@ const navItems = [
   { href: '/products', label: 'Products', icon: Package },
   { href: '/customers', label: 'Customers', icon: Users },
   { href: '/revenue', label: 'Revenue', icon: DollarSign },
+  { href: '/comparison', label: '2025 vs 2026', icon: GitCompareArrows },
   { href: '/inventory', label: 'Inventory', icon: Warehouse },
   { href: '/ai-insights', label: 'AI Insights', icon: Lightbulb },
   { href: '/upload', label: 'Upload Data', icon: Upload },

@@ -32,6 +32,36 @@ const trendIcons = {
   stable: <Minus className="h-3.5 w-3.5 text-gray-400" />,
 };
 
+function SalesTable({ sales }: { sales: ProductSale[] }) {
+  return (
+    <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-gray-100 bg-gray-50">
+            {['Date', 'Invoice', 'Customer', 'Qty', 'Unit Price', 'Total'].map((h) => (
+              <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-50">
+          {sales.map((s, i) => (
+            <tr key={`${s.invoice_id}-${i}`} className="hover:bg-gray-50">
+              <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{formatDate(s.invoice_date)}</td>
+              <td className="px-3 py-2 font-mono text-xs text-gray-500">{s.invoice_number}</td>
+              <td className="px-3 py-2 text-gray-800">{s.customer_name}</td>
+              <td className="px-3 py-2 text-gray-700">{formatNumber(s.quantity)}</td>
+              <td className="px-3 py-2 text-gray-600">{formatCurrency(s.unit_price)}</td>
+              <td className="px-3 py-2 font-semibold text-gray-900">{formatCurrency(s.total)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function ProductsPage() {
   const { data, loading, error, refresh } = useAnalyticsData<ProductsData>('products');
   const [search, setSearch] = useState('');
@@ -39,6 +69,7 @@ export default function ProductsPage() {
   const [velocityFilter, setVelocityFilter] = useState('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [salesByProduct, setSalesByProduct] = useState<Record<string, ProductSale[]>>({});
+  const [sales2025ByProduct, setSales2025ByProduct] = useState<Record<string, ProductSale[]>>({});
   const [loadingSales, setLoadingSales] = useState<string | null>(null);
 
   async function toggleProduct(productId: string) {
@@ -53,8 +84,10 @@ export default function ProductsPage() {
         const res = await fetch(`/api/data?view=product-sales&productId=${productId}`);
         const json = await res.json();
         setSalesByProduct((prev) => ({ ...prev, [productId]: json.sales ?? [] }));
+        setSales2025ByProduct((prev) => ({ ...prev, [productId]: json.sales2025 ?? [] }));
       } catch {
         setSalesByProduct((prev) => ({ ...prev, [productId]: [] }));
+        setSales2025ByProduct((prev) => ({ ...prev, [productId]: [] }));
       } finally {
         setLoadingSales(null);
       }
@@ -178,6 +211,7 @@ export default function ProductsPage() {
                       const vel = velocityConfig[product.velocity];
                       const isExpanded = expandedId === product.product_id;
                       const sales = salesByProduct[product.product_id];
+                      const sales2025 = sales2025ByProduct[product.product_id];
                       return (
                         <React.Fragment key={product.product_id}>
                           <tr
@@ -206,41 +240,33 @@ export default function ProductsPage() {
                           {isExpanded && (
                             <tr className="bg-gray-50/60">
                               <td colSpan={10} className="px-4 py-4">
-                                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                  Sales history — who bought it & when
-                                </p>
                                 {loadingSales === product.product_id ? (
                                   <div className="flex items-center gap-2 py-4 text-sm text-gray-400">
                                     <Loader2 className="h-4 w-4 animate-spin" /> Loading sales…
                                   </div>
-                                ) : sales && sales.length > 0 ? (
-                                  <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-                                    <table className="w-full text-sm">
-                                      <thead>
-                                        <tr className="border-b border-gray-100 bg-gray-50">
-                                          {['Date', 'Invoice', 'Customer', 'Qty', 'Unit Price', 'Total'].map((h) => (
-                                            <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-400">
-                                              {h}
-                                            </th>
-                                          ))}
-                                        </tr>
-                                      </thead>
-                                      <tbody className="divide-y divide-gray-50">
-                                        {sales.map((s, i) => (
-                                          <tr key={`${s.invoice_id}-${i}`} className="hover:bg-gray-50">
-                                            <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{formatDate(s.invoice_date)}</td>
-                                            <td className="px-3 py-2 font-mono text-xs text-gray-500">{s.invoice_number}</td>
-                                            <td className="px-3 py-2 text-gray-800">{s.customer_name}</td>
-                                            <td className="px-3 py-2 text-gray-700">{formatNumber(s.quantity)}</td>
-                                            <td className="px-3 py-2 text-gray-600">{formatCurrency(s.unit_price)}</td>
-                                            <td className="px-3 py-2 font-semibold text-gray-900">{formatCurrency(s.total)}</td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
                                 ) : (
-                                  <p className="py-4 text-sm text-gray-400">No sales recorded for this product in the synced period.</p>
+                                  <div className="space-y-4">
+                                    <div>
+                                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                        2026 sales (synced) — who bought it & when
+                                      </p>
+                                      {sales && sales.length > 0 ? (
+                                        <SalesTable sales={sales} />
+                                      ) : (
+                                        <p className="py-2 text-sm text-gray-400">No 2026 sales synced for this product yet.</p>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                        2025 sales (from records)
+                                      </p>
+                                      {sales2025 && sales2025.length > 0 ? (
+                                        <SalesTable sales={sales2025} />
+                                      ) : (
+                                        <p className="py-2 text-sm text-gray-400">No 2025 sales on record for this product.</p>
+                                      )}
+                                    </div>
+                                  </div>
                                 )}
                               </td>
                             </tr>

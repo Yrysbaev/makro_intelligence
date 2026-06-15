@@ -29,8 +29,14 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
           hasLiveData: data.hasLiveData,
           sales: productId ? data.productSales[productId] || [] : [],
+          sales2025: productId ? data.productSales2025[productId] || [] : [],
         });
       }
+      case 'comparison':
+        return NextResponse.json({
+          hasLiveData: data.hasLiveData,
+          comparison: data.yearComparison,
+        });
       case 'revenue':
         return NextResponse.json({
           hasLiveData: data.hasLiveData,
