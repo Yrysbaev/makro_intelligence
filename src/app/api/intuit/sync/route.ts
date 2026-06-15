@@ -5,8 +5,8 @@ import { formatFetchError } from '@/lib/retry';
 import { getIntuitEnvironment } from '@/lib/resilient-fetch';
 import { getIntuitRedirectUri, getOAuthSetupIssue } from '@/lib/intuit';
 import {
-  fetchCustomers, fetchInvoices, fetchItems, fetchEmployees,
-  refreshAccessToken, mapQBOCustomer, mapQBOItem, mapQBOInvoice, mapQBOEmployee,
+  fetchCustomers, fetchInvoices, fetchItems,
+  refreshAccessToken, mapQBOCustomer, mapQBOItem, mapQBOInvoice,
   SYNC_START_DATE,
 } from '@/lib/intuit';
 
@@ -71,10 +71,11 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json().catch(() => ({}));
-    const { entities = ['customers', 'items', 'employees', 'invoices'], since, startDate } = body as {
+    const { entities = ['customers', 'items', 'invoices'], since, startDate, endDate } = body as {
       entities?: string[];
       since?: string;
       startDate?: string;
+      endDate?: string;
     };
 
     const { data: conn, error: connErr } = await getSupabaseAdmin()
@@ -105,18 +106,6 @@ export async function POST(request: NextRequest) {
     const results: Record<string, number> = {};
     const fetched: Record<string, number> = {};
     const environment = getIntuitEnvironment();
-
-    if (entities.includes('employees')) {
-      const employees = await fetchEmployees(realmId, accessToken);
-      fetched.employees = employees.length;
-      const rows = employees.map((emp) => ({
-        ...mapQBOEmployee(emp),
-        territory: 'Unassigned',
-      }));
-      const r = await resilientUpsert('sales_managers', rows, 'qbo_id');
-      results.employees = r.upserted;
-      errors.push(...r.errors);
-    }
 
     if (entities.includes('items')) {
       const items = await fetchItems(realmId, accessToken);
@@ -150,7 +139,9 @@ export async function POST(request: NextRequest) {
 
     if (entities.includes('invoices')) {
       const admin = getSupabaseAdmin();
-      const invoices = await fetchInvoices(realmId, accessToken, since, startDate || SYNC_START_DATE);
+      const invoices = await fetchInvoices(
+        realmId, accessToken, since, startDate || SYNC_START_DATE, endDate
+      );
       fetched.invoices = invoices.length;
 
       // Resolve customer/product ids in two queries instead of one per row —
@@ -171,18 +162,78 @@ export async function POST(request: NextRequest) {
       );
 
       const mapped = invoices.map((inv) => mapQBOInvoice(inv));
-      let skipped = 0;
-      const invoiceRows: Record<string, unknown>[] = [];
 
+      // Auto-create customers/products referenced by invoices but missing from
+      // the DB (e.g. inactive/deleted accounts). Without this their invoices —
+      // and the revenue on them — would be silently dropped.
+      const missingCustomers = new Map<string, string>();
+      for (const { invoice } of mapped) {
+        const qid = String(invoice.qbo_customer_id);
+        if (qid && qid !== 'undefined' && !customerIdByQbo.has(qid)) {
+          missingCustomers.set(qid, invoice.customer_name || `QBO Customer ${qid}`);
+        }
+      }
+      if (missingCustomers.size > 0) {
+        const rows = [...missingCustomers].map(([qbo_id, name]) => ({
+          qbo_id, name: name.slice(0, 200), is_active: false,
+        }));
+        for (const batch of chunk(rows, UPSERT_CHUNK_SIZE)) {
+          const { data, error } = await admin
+            .from('customers')
+            .upsert(batch as never[], { onConflict: 'qbo_id' })
+            .select('id, qbo_id');
+          if (error) errors.push(`auto-create customers: ${error.message}`);
+          for (const r of data || []) customerIdByQbo.set(String(r.qbo_id), r.id as string);
+        }
+      }
+
+      const missingProducts = new Map<string, string>();
+      for (const { line_items } of mapped) {
+        for (const line of line_items) {
+          const pid = String(line.qbo_item_id);
+          if (pid && pid !== 'undefined' && !productIdByQbo.has(pid)) {
+            missingProducts.set(pid, line.product_name || `QBO Item ${pid}`);
+          }
+        }
+      }
+      if (missingProducts.size > 0) {
+        const rows = [...missingProducts].map(([qbo_id, name]) => ({
+          qbo_id,
+          name: name.slice(0, 200),
+          sku: `QBO-${qbo_id}`,
+          category: 'Uncategorized',
+          unit_price: 0,
+          cost_price: 0,
+          unit_of_measure: 'unit',
+          is_active: false,
+        }));
+        for (const batch of chunk(rows, UPSERT_CHUNK_SIZE)) {
+          const { data, error } = await admin
+            .from('products')
+            .upsert(batch as never[], { onConflict: 'qbo_id' })
+            .select('id, qbo_id');
+          if (error) errors.push(`auto-create products: ${error.message}`);
+          for (const r of data || []) productIdByQbo.set(String(r.qbo_id), r.id as string);
+        }
+      }
+
+      // invoice_number is UNIQUE — guarantee uniqueness within this run so a
+      // duplicate QuickBooks DocNumber can't fail the upsert and drop invoices.
+      const usedNumbers = new Set<string>();
+      let unresolved = 0;
+      const invoiceRows: Record<string, unknown>[] = [];
       for (const { invoice } of mapped) {
         const customerId = customerIdByQbo.get(String(invoice.qbo_customer_id));
         if (!customerId) {
-          skipped++;
+          unresolved++;
           continue;
         }
+        let invoiceNumber = invoice.invoice_number || `QBO-${invoice.qbo_id}`;
+        if (usedNumbers.has(invoiceNumber)) invoiceNumber = `${invoiceNumber}-${invoice.qbo_id}`;
+        usedNumbers.add(invoiceNumber);
         invoiceRows.push({
           qbo_id: invoice.qbo_id,
-          invoice_number: invoice.invoice_number,
+          invoice_number: invoiceNumber,
           customer_id: customerId,
           invoice_date: invoice.invoice_date,
           due_date: invoice.due_date,
@@ -193,20 +244,29 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Upsert in chunks — a single multi-thousand-row request can exceed the
-      // platform's payload/time limits and return a non-JSON error page
+      // Upsert in chunks; on a batch error fall back to per-row so one bad row
+      // (e.g. a constraint clash) can't drop the rest of the batch.
       const invoiceIdByQbo = new Map<string, string>();
       for (const batch of chunk(invoiceRows, UPSERT_CHUNK_SIZE)) {
-        const { data: upsertedInvoices, error: invErr } = await admin
+        const { data, error } = await admin
           .from('invoices')
           .upsert(batch as never[], { onConflict: 'qbo_id' })
           .select('id, qbo_id');
-
-        if (invErr) {
-          errors.push(`invoices: ${invErr.message}`);
-        }
-        for (const row of upsertedInvoices || []) {
-          invoiceIdByQbo.set(String(row.qbo_id), row.id as string);
+        if (error) {
+          for (const row of batch) {
+            const { data: one, error: rowErr } = await admin
+              .from('invoices')
+              .upsert(row as never, { onConflict: 'qbo_id' })
+              .select('id, qbo_id')
+              .single();
+            if (rowErr) {
+              errors.push(`invoice ${String((row as Record<string, unknown>).qbo_id)}: ${rowErr.message}`);
+            } else if (one) {
+              invoiceIdByQbo.set(String(one.qbo_id), one.id as string);
+            }
+          }
+        } else {
+          for (const row of data || []) invoiceIdByQbo.set(String(row.qbo_id), row.id as string);
         }
       }
 
@@ -247,8 +307,12 @@ export async function POST(request: NextRequest) {
       }
 
       results.invoices = invoiceIdByQbo.size;
-      if (skipped > 0) {
-        errors.push(`${skipped} invoice(s) skipped — sync customers first`);
+      // Stored should equal fetched; flag any shortfall so undercounts are visible.
+      if (invoiceIdByQbo.size < invoices.length) {
+        errors.push(
+          `${invoices.length - invoiceIdByQbo.size} of ${invoices.length} invoice(s) not stored` +
+            (unresolved > 0 ? ` (${unresolved} had no resolvable customer)` : '')
+        );
       }
     }
 

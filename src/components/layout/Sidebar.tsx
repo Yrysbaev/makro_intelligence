@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Package, Users, DollarSign,
-  Warehouse, Lightbulb, Upload, Settings, ChevronLeft,
+  Warehouse, Upload, Settings, ChevronLeft,
   ChevronRight, BarChart3, GitCompareArrows,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -17,7 +17,6 @@ const navItems = [
   { href: '/revenue', label: 'Revenue', icon: DollarSign },
   { href: '/comparison', label: '2025 vs 2026', icon: GitCompareArrows },
   { href: '/inventory', label: 'Inventory', icon: Warehouse },
-  { href: '/ai-insights', label: 'AI Insights', icon: Lightbulb },
   { href: '/upload', label: 'Upload Data', icon: Upload },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
@@ -74,11 +73,6 @@ export default function Sidebar() {
                 >
                   <Icon className={cn('h-4.5 w-4.5 shrink-0', isActive ? 'text-white' : 'text-slate-400')} size={18} />
                   {!collapsed && <span>{item.label}</span>}
-                  {!collapsed && item.href === '/ai-insights' && (
-                    <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-blue-500 text-[10px] font-bold text-white">
-                      5
-                    </span>
-                  )}
                 </Link>
               </li>
             );

@@ -285,9 +285,11 @@ export interface QBOEmployee {
 }
 
 export async function fetchCustomers(realmId: string, accessToken: string): Promise<QBOCustomer[]> {
+  // Include inactive/deleted customers — invoices reference them, and skipping
+  // them would silently drop that revenue from the sync.
   return qboQueryAll<QBOCustomer>(
     realmId, accessToken,
-    'SELECT * FROM Customer WHERE Active = true'
+    'SELECT * FROM Customer'
   );
 }
 
@@ -306,11 +308,15 @@ export async function fetchInvoices(
   realmId: string,
   accessToken: string,
   since?: string,
-  startDate: string = SYNC_START_DATE
+  startDate: string = SYNC_START_DATE,
+  endDate?: string
 ): Promise<QBOInvoice[]> {
   const conditions: string[] = [];
   if (startDate && isValidQboDate(startDate)) {
     conditions.push(`TxnDate >= '${startDate}'`);
+  }
+  if (endDate && isValidQboDate(endDate)) {
+    conditions.push(`TxnDate <= '${endDate}'`);
   }
   if (since) {
     conditions.push(`MetaData.LastUpdatedTime > '${since}'`);
@@ -323,9 +329,10 @@ export async function fetchInvoices(
 }
 
 export async function fetchItems(realmId: string, accessToken: string): Promise<QBOItem[]> {
+  // Include inactive items so invoice line items always resolve to a product.
   return qboQueryAll<QBOItem>(
     realmId, accessToken,
-    'SELECT * FROM Item WHERE Active = true'
+    'SELECT * FROM Item'
   );
 }
 

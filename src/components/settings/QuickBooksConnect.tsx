@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   CheckCircle, AlertCircle, RefreshCw, Unlink, ExternalLink,
-  Users, Package, FileText, UserCheck, Loader2,
+  Users, Package, FileText, Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -37,7 +37,6 @@ interface SyncResult {
 }
 
 const SYNC_ENTITIES = [
-  { key: 'employees', label: 'Sales Reps / Employees', icon: UserCheck, color: 'text-blue-600' },
   { key: 'items', label: 'Products & Items', icon: Package, color: 'text-violet-600' },
   { key: 'customers', label: 'Customers', icon: Users, color: 'text-emerald-600' },
   { key: 'invoices', label: 'Invoices & Line Items', icon: FileText, color: 'text-amber-600' },
@@ -58,14 +57,54 @@ async function parseJsonResponse(res: Response): Promise<any> {
   }
 }
 
+function mergeCounts(target: Record<string, number>, src?: Record<string, number>) {
+  if (!src) return;
+  for (const [k, v] of Object.entries(src)) target[k] = (target[k] || 0) + (Number(v) || 0);
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+// Inclusive month windows from 2026-01 through the current month, so invoices
+// are synced in small bounded requests that can't time out.
+function buildMonthWindows(): { start: string; end: string; label: string }[] {
+  const out: { start: string; end: string; label: string }[] = [];
+  const now = new Date();
+  const endYear = Math.max(now.getFullYear(), 2026);
+  for (let y = 2026; y <= endYear; y++) {
+    const upto = y < now.getFullYear() ? 11 : now.getMonth();
+    for (let m = 0; m <= upto; m++) {
+      const lastDay = new Date(y, m + 1, 0).getDate();
+      out.push({
+        start: `${y}-${pad2(m + 1)}-01`,
+        end: `${y}-${pad2(m + 1)}-${pad2(lastDay)}`,
+        label: `${MONTHS[m]} ${y}`,
+      });
+    }
+  }
+  return out;
+}
+
+// Split a date window in half for adaptive retry on timeout.
+function splitWindow(start: string, end: string): { mid: string; next: string } {
+  const s = Date.parse(`${start}T00:00:00Z`);
+  const e = Date.parse(`${end}T00:00:00Z`);
+  const midMs = s + Math.floor((e - s) / 2);
+  return {
+    mid: new Date(midMs).toISOString().slice(0, 10),
+    next: new Date(midMs + 86400000).toISOString().slice(0, 10),
+  };
+}
+
 export default function QuickBooksConnect() {
   const searchParams = useSearchParams();
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState(0);
+  const [syncStatus, setSyncStatus] = useState('');
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
-  const [selectedEntities, setSelectedEntities] = useState<string[]>(['employees', 'items', 'customers', 'invoices']);
+  const [selectedEntities, setSelectedEntities] = useState<string[]>(['items', 'customers', 'invoices']);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
@@ -95,46 +134,94 @@ export default function QuickBooksConnect() {
 
   async function handleSync() {
     setSyncing(true);
-    setSyncProgress(10);
+    setSyncProgress(0);
+    setSyncStatus('');
     setSyncResult(null);
 
-    try {
-      // Simulate progress steps
-      const progressInterval = setInterval(() => {
-        setSyncProgress((p) => Math.min(p + 15, 85));
-      }, 600);
+    const synced: Record<string, number> = {};
+    const fetched: Record<string, number> = {};
+    const allErrors: string[] = [];
 
+    const refEntities = ['customers', 'items'].filter((e) => selectedEntities.includes(e));
+    const wantsInvoices = selectedEntities.includes('invoices');
+    const windows = wantsInvoices ? buildMonthWindows() : [];
+    const totalSteps = Math.max(refEntities.length + windows.length, 1);
+    let done = 0;
+    const advance = () => {
+      done++;
+      setSyncProgress(Math.round((done / totalSteps) * 100));
+    };
+
+    async function postSync(payload: Record<string, unknown>) {
       const res = await fetch('/api/intuit/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entities: selectedEntities }),
+        body: JSON.stringify(payload),
       });
-
-      clearInterval(progressInterval);
-      setSyncProgress(100);
-
       const data = await parseJsonResponse(res);
+      if (!res.ok) throw new Error(data.error || 'Sync request failed');
+      return data;
+    }
 
-      if (!res.ok) {
-        setSyncResult({
-          success: false,
-          synced: {},
-          synced_at: '',
-          error: data.error || 'Sync failed',
-        });
-        return;
+    // One request per month; on timeout, split the window and retry each half.
+    async function syncWindow(start: string, end: string, depth = 0): Promise<void> {
+      try {
+        const data = await postSync({ entities: ['invoices'], startDate: start, endDate: end });
+        mergeCounts(synced, data.synced);
+        mergeCounts(fetched, data.fetched);
+        if (data.errors?.length) allErrors.push(...data.errors);
+      } catch (e: any) {
+        if (start !== end && depth < 6) {
+          const { mid, next } = splitWindow(start, end);
+          await syncWindow(start, mid, depth + 1);
+          await syncWindow(next, end, depth + 1);
+        } else {
+          allErrors.push(`invoices ${start}..${end}: ${e.message}`);
+        }
+      }
+    }
+
+    try {
+      for (const ent of refEntities) {
+        setSyncStatus(ent === 'items' ? 'Syncing products…' : 'Syncing customers…');
+        try {
+          const data = await postSync({ entities: [ent] });
+          mergeCounts(synced, data.synced);
+          mergeCounts(fetched, data.fetched);
+          if (data.errors?.length) allErrors.push(...data.errors);
+        } catch (e: any) {
+          allErrors.push(`${ent}: ${e.message}`);
+        }
+        advance();
       }
 
-      setSyncResult(data);
+      for (const w of windows) {
+        setSyncStatus(`Syncing invoices — ${w.label}`);
+        await syncWindow(w.start, w.end);
+        advance();
+      }
 
-      if (data.success) {
+      setSyncProgress(100);
+      setSyncStatus('');
+      const success = Object.values(synced).some((v) => v > 0);
+      setSyncResult({
+        success,
+        synced,
+        fetched,
+        invoice_start_date: wantsInvoices ? '2026-01-01' : undefined,
+        errors: allErrors.slice(0, 10),
+        synced_at: new Date().toISOString(),
+      });
+
+      if (success) {
         await fetch('/api/data', { method: 'POST' });
         await fetchStatus();
       }
     } catch (err: any) {
-      setSyncResult({ success: false, synced: {}, synced_at: '', error: err.message });
+      setSyncResult({ success: false, synced, synced_at: '', error: err.message, errors: allErrors.slice(0, 10) });
     } finally {
       setSyncing(false);
+      setSyncStatus('');
       setTimeout(() => setSyncProgress(0), 1000);
     }
   }
@@ -310,7 +397,7 @@ export default function QuickBooksConnect() {
           {syncing && (
             <div>
               <div className="flex items-center justify-between text-xs text-gray-500 mb-1.5">
-                <span>Syncing from QuickBooks...</span>
+                <span>{syncStatus || 'Syncing from QuickBooks…'}</span>
                 <span>{syncProgress}%</span>
               </div>
               <Progress value={syncProgress} className="h-2" />
