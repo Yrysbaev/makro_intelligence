@@ -296,7 +296,7 @@ export async function fetchCustomers(realmId: string, accessToken: string): Prom
  * years) is what makes the sync exceed serverless time limits, so we only
  * sync invoices dated on/after this day. Override with INTUIT_SYNC_START_DATE.
  */
-export const SYNC_START_DATE = process.env.INTUIT_SYNC_START_DATE || '2025-01-01';
+export const SYNC_START_DATE = process.env.INTUIT_SYNC_START_DATE || '2026-01-01';
 
 function isValidQboDate(d: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(d);

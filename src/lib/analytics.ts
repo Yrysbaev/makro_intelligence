@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabase-admin';
 import { withRetry } from '@/lib/retry';
+import { getBaseline2025, productKey, SALES_2025_PERIOD } from '@/lib/sales-2025';
 import type {
   CustomerAnalytics,
   DailyRevenuePoint,
@@ -15,6 +16,10 @@ import type {
   TopCustomer,
   TopMarginProduct,
   TopProduct,
+  YearComparison,
+  ProductComparison,
+  CategoryComparison,
+  MonthlyComparisonPoint,
 } from '@/types';
 
 interface DbCustomer {
@@ -96,6 +101,8 @@ export interface AnalyticsBundle {
   customerAnalytics: CustomerAnalytics[];
   productAnalytics: ProductAnalytics[];
   productSales: Record<string, ProductSale[]>;
+  productSales2025: Record<string, ProductSale[]>;
+  yearComparison: YearComparison;
   salesManagerAnalytics: SalesManagerAnalytics[];
   inventory: InventoryItem[];
 }
@@ -181,13 +188,21 @@ async function fetchBaseData() {
   };
 }
 
+// 2025 comes from the fixed file baseline; QuickBooks now syncs 2026 onward. Scope
+// all live analytics to this floor so leftover pre-2026 rows can't double-count.
+const LIVE_FLOOR = '2026-01-01';
+
 function buildAnalytics(data: Awaited<ReturnType<typeof fetchBaseData>>): AnalyticsBundle {
-  const { customers, products, salesManagers, invoices, invoiceItems, inventory } = data;
+  const { customers, products, salesManagers, inventory } = data;
+  const invoices = data.invoices.filter((i) => i.invoice_date >= LIVE_FLOOR);
+  const liveInvoiceIds = new Set(invoices.map((i) => i.id));
+  const invoiceItems = data.invoiceItems.filter((it) => liveInvoiceIds.has(it.invoice_id));
   const now = new Date();
   const productMap = new Map(products.map((p) => [p.id, p]));
   const customerMap = new Map(customers.map((c) => [c.id, c]));
   const managerMap = new Map(salesManagers.map((m) => [m.id, m]));
   const invoiceMap = new Map(invoices.map((i) => [i.id, i]));
+  const baseline = getBaseline2025();
 
   const hasLiveData =
     customers.length > 0 || products.length > 0 || invoices.length > 0;
@@ -303,6 +318,13 @@ function buildAnalytics(data: Awaited<ReturnType<typeof fetchBaseData>>): Analyt
   }
   for (const list of Object.values(productSales)) {
     list.sort((a, b) => b.invoice_date.localeCompare(a.invoice_date));
+  }
+
+  // Map each live product to its 2025 sales history (matched by SKU code / name).
+  const productSales2025: Record<string, ProductSale[]> = {};
+  for (const p of products) {
+    const sales = baseline.productSales.get(productKey(p.sku, p.name));
+    if (sales && sales.length) productSales2025[p.id] = sales;
   }
 
   // ── Customer analytics ─────────────────────────────────────────────────────
@@ -438,8 +460,15 @@ function buildAnalytics(data: Awaited<ReturnType<typeof fetchBaseData>>): Analyt
   const lastMonthKey = shiftMonth(anchorKey, -1);
   const lastYearKey = shiftMonth(anchorKey, -12);
 
+  // Daily revenue for a month. 2025 months come from the fixed baseline (QuickBooks
+  // now syncs 2026 only); other months come from live synced invoices.
   const dailyTotals = (key: string) => {
     const map = new Map<number, { revenue: number; orders: number }>();
+    if (key.startsWith(`${SALES_2025_PERIOD}-`)) {
+      const bd = baseline.dailyByMonth.get(key);
+      if (bd) for (const [day, rev] of bd) map.set(day, { revenue: rev, orders: 0 });
+      return map;
+    }
     for (const inv of invoices) {
       if (monthKey(inv.invoice_date) !== key) continue;
       const day = Number(inv.invoice_date.slice(8, 10));
@@ -558,6 +587,108 @@ function buildAnalytics(data: Awaited<ReturnType<typeof fetchBaseData>>): Analyt
       percentage: (revenue / totalCategoryRevenue) * 100,
     }))
     .sort((a, b) => b.revenue - a.revenue);
+
+  // ── 2025 vs 2026 comparison ────────────────────────────────────────────────
+  const compMap = new Map<string, ProductComparison>();
+  for (const pa of productAnalytics) {
+    const key = productKey(pa.sku, pa.product_name);
+    if (!compMap.has(key)) {
+      compMap.set(key, {
+        key,
+        product_name: pa.product_name,
+        sku: pa.sku || null,
+        category: pa.category || 'Uncategorized',
+        revenue_2025: 0,
+        revenue_2026: 0,
+        units_2025: 0,
+        units_2026: 0,
+        revenue_delta_pct: null,
+        status: 'only_2026',
+      });
+    }
+    const c = compMap.get(key)!;
+    c.revenue_2026 += pa.revenue;
+    c.units_2026 += pa.cases_sold;
+  }
+  for (const p of baseline.productTotals.values()) {
+    if (!compMap.has(p.key)) {
+      compMap.set(p.key, {
+        key: p.key,
+        product_name: p.name,
+        sku: p.sku,
+        category: 'Uncategorized',
+        revenue_2025: 0,
+        revenue_2026: 0,
+        units_2025: 0,
+        units_2026: 0,
+        revenue_delta_pct: null,
+        status: 'only_2025',
+      });
+    }
+    const c = compMap.get(p.key)!;
+    c.revenue_2025 += p.revenue;
+    c.units_2025 += p.units;
+  }
+
+  const productComparison: ProductComparison[] = [];
+  for (const c of compMap.values()) {
+    if (c.revenue_2025 === 0 && c.revenue_2026 === 0) continue;
+    c.status =
+      c.revenue_2025 > 0 && c.revenue_2026 > 0
+        ? 'matched'
+        : c.revenue_2025 > 0
+          ? 'only_2025'
+          : 'only_2026';
+    c.revenue_delta_pct =
+      c.revenue_2025 > 0 ? ((c.revenue_2026 - c.revenue_2025) / c.revenue_2025) * 100 : null;
+    productComparison.push(c);
+  }
+  productComparison.sort(
+    (a, b) => b.revenue_2025 + b.revenue_2026 - (a.revenue_2025 + a.revenue_2026)
+  );
+
+  const catMap = new Map<string, CategoryComparison>();
+  for (const c of productComparison) {
+    if (!catMap.has(c.category)) {
+      catMap.set(c.category, { category: c.category, revenue_2025: 0, revenue_2026: 0 });
+    }
+    const cc = catMap.get(c.category)!;
+    cc.revenue_2025 += c.revenue_2025;
+    cc.revenue_2026 += c.revenue_2026;
+  }
+  const categoryComparison = [...catMap.values()].sort(
+    (a, b) => b.revenue_2025 + b.revenue_2026 - (a.revenue_2025 + a.revenue_2026)
+  );
+
+  const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthlyComparison: MonthlyComparisonPoint[] = MONTH_LABELS.map((label, i) => {
+    const mm = String(i + 1).padStart(2, '0');
+    const has2026 = monthlyMap.has(`2026-${mm}`);
+    return {
+      label,
+      revenue_2025: baseline.monthlyRevenue.get(`2025-${mm}`)?.revenue || 0,
+      revenue_2026: has2026 ? monthlyMap.get(`2026-${mm}`)!.revenue : null,
+    };
+  });
+
+  const revenue2026Total = invoices.reduce((s, i) => s + n(i.total), 0);
+  const orders2025Total = [...baseline.monthlyRevenue.values()].reduce((s, m) => s + m.orders, 0);
+  const yearComparison: YearComparison = {
+    summary: {
+      label_2025: '2025 (full year)',
+      label_2026: '2026 (year to date)',
+      revenue_2025: baseline.totalRevenue,
+      revenue_2026: revenue2026Total,
+      orders_2025: orders2025Total,
+      orders_2026: invoices.length,
+      matched_products: productComparison.filter((c) => c.status === 'matched').length,
+      new_products: productComparison.filter((c) => c.status === 'only_2026').length,
+      dropped_products: productComparison.filter((c) => c.status === 'only_2025').length,
+    },
+    monthly: monthlyComparison,
+    products: productComparison,
+    categories: categoryComparison,
+  };
 
   // ── Revenue by territory ───────────────────────────────────────────────────
   const territoryTotals = new Map<string, number>();
@@ -679,6 +810,8 @@ function buildAnalytics(data: Awaited<ReturnType<typeof fetchBaseData>>): Analyt
     customerAnalytics,
     productAnalytics,
     productSales,
+    productSales2025,
+    yearComparison,
     salesManagerAnalytics,
     inventory: inventoryItems,
   };
